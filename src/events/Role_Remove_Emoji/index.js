@@ -43,7 +43,7 @@ export const action = async(reaction, user) => {
                     guildMember.roles.remove(role);
                     break;
                 }
-                case ':Minecraft:':{
+                case 'Minecraft':{
                     const role = reaction.message.guild.roles.cache.get('991202365166325923');
                     guildMember.roles.remove(role);
                     break;
