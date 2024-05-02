@@ -2,7 +2,7 @@ import {SlashCommandBuilder} from 'discord.js'
 
 
 export const command = new SlashCommandBuilder()
-.setName('sip')
+.setName('sip_sip')
 .setDescription('sip command')
 
 

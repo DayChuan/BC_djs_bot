@@ -10,7 +10,7 @@ export const action = async(reaction, user) => {
         if(!reaction.message.guild) return;
         if(reaction.message.channelId === process.env.RoleChannel_ID){
             const emoji = reaction.emoji.name;
-            console.log(reaction.emoji.name);
+            // console.log(reaction.emoji.name);
             const guildMember = reaction.message.guild.members.cache.get(user.id);
             switch(emoji){
                 case '🇻':{
