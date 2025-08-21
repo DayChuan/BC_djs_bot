@@ -14,24 +14,44 @@ export const action = async(message) => {
         return;
     }
 
+    if(message.content.includes('確實')){
+        if(Math.floor(Math.random()*2) == 0){
+            message.channel.send('確かに');
+        }
+        return;
+    }
+
     if(message.content.includes('確') ){
-        if(Math.floor(Math.random()*5) == 0){
+        if(Math.floor(Math.random()*2) == 0){
             message.channel.send(':thinking:');
         }
         return;
     }
 
+    if(message.content == '絕對' ){
+        const pttpttid = '<@780856075766857758>'
+        if(Math.floor(Math.random()*2) == 0){
+            message.channel.send(pttpttid);
+        }
+        return;
+    }
+
+    if(message.content.includes('笑死') ){
+        if(Math.floor(Math.random()*2) == 0){
+            message.channel.send('真的笑死');
+        }
+        return;
+    }
+
     if(message.content.startsWith('?') || message.content.startsWith('？')){
-        if(Math.floor(Math.random()*3) == 0){
+        if(Math.floor(Math.random()*2) == 0){
             message.channel.send('甚麼意思');
         }
         return;
     }
 
     if(message.content.includes('冷靜')){
-        if(Math.floor(Math.random()*2) == 0){
             message.channel.send('先不要冷靜');
-        }
         return;
     }
 
@@ -81,16 +101,29 @@ export const action = async(message) => {
     }
 
     if(message.content.includes('吧')){
-        message.channel.send('你要確餒?');
+        const halreactoptions = ["你要確餒?", "絕對", "下次一定", "真的嗎~"];
+        const halreactrandom = halreactoptions[Math.floor(Math.random()*halreactoptions.length)];
+        if(Math.floor(Math.random()*2) == 0){
+            message.channel.send(halreactrandom);
+        }
         return;
     }
 
     if(message.content.includes('要不要')){
-        if(Math.floor(Math.random()*5) == 0){
+        if(Math.floor(Math.random()*2) == 0){
             message.channel.send('梨子🍐');
         }
         return;
     }
+    if(message.content.includes('我也要')){
+        message.react('➕');
+        return;
+    }
+    if(message.content.includes('梨子')){
+        message.react('🍐');
+        return;
+    }
+    
     // if(message.content.includes('おめでとう')){
     //     message.react(':clap:');
     //     return;
@@ -103,4 +136,7 @@ export const action = async(message) => {
     //     }
     //     return;
     // }
+}
+const roll = async denominator => {
+    
 }

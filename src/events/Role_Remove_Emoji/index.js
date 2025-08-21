@@ -53,6 +53,16 @@ export const action = async(reaction, user) => {
                     guildMember.roles.remove(role);
                     break;
                 }
+                case '🍁':{
+                    const role = reaction.message.guild.roles.cache.get('1384929867216326827');
+                    guildMember.roles.remove(role);
+                    break;
+                }
+                case '🏕️':{
+                    const role = reaction.message.guild.roles.cache.get('1063824593678249984');
+                    guildMember.roles.remove(role);
+                    break;
+                }
                 default:{
                     break;
                 }

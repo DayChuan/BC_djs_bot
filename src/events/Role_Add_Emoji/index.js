@@ -6,8 +6,12 @@ export const event = {
 
 export const action = async(reaction, user) => {
     try{
+        
+        // console.log(reaction.message.guild);
+        // console.log(reaction.message.channelId); 
         if(user.bot)    return;
         if(!reaction.message.guild) return;
+          
         if(reaction.message.channelId === process.env.RoleChannel_ID){
             // console.log(reaction.emoji.name);
             const emoji = reaction.emoji.name;
@@ -50,6 +54,16 @@ export const action = async(reaction, user) => {
                 }
                 case '🇱':{
                     const role = reaction.message.guild.roles.cache.get('1054357626550501416');
+                    guildMember.roles.add(role);
+                    break;
+                }
+                case '🍁':{
+                    const role = reaction.message.guild.roles.cache.get('1384929867216326827');
+                    guildMember.roles.add(role);
+                    break;
+                }
+                case '🏕️':{
+                    const role = reaction.message.guild.roles.cache.get('1063824593678249984');
                     guildMember.roles.add(role);
                     break;
                 }
