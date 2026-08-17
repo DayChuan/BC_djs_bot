@@ -1,0 +1,338 @@
+# BC_djs_bot 開發計畫
+
+重寫日期：2026-08-14
+問題清單：[ISSUES.md](./ISSUES.md)（僅作為既有問題的參考索引，不再是計畫主軸）
+jail 建置步驟：[JAIL-SETUP.md](./JAIL-SETUP.md)
+
+## 現況
+
+- 正式站 bot 與測試 bot 都已連續運行超過兩天且穩定（2026-08-17 確認）。**不再做觀察期，掛掉時再撈 log 給我判斷。**
+- 錯誤攔截與檔案 log（`src/core/logger.js` + `main.js` 的 process / client 層級 handler）已實作完成並進版控，尚未在測試 jail 完成驗收。
+- 原本以「查崩潰原因」為主軸的階段計畫已作廢。
+
+## 目標
+
+1. **在測試環境修掉既有問題**：先拔掉 Vue/Pinia，合併重複的 Role 對照表。
+2. **加四個新功能**：語音暫時靜音、每週投票、每日日文分享、帳號管理指令。
+
+## 核心原則
+
+1. **所有改動都先在測試 jail 驗證，再合併到正式站。** NAS 工作目錄只編輯、不執行。
+2. **一次做一個階段**，做完停下來，列出「改了什麼」與「怎麼驗證」。
+3. **每階段一個 commit**，出問題只回滾該階段。
+4. 新功能一律建立在 Phase 1 的共用地基上，不各自造輪子。
+
+## 階段總覽
+
+| 階段 | 內容 | 依賴 |
+|---|---|---|
+| **Phase T** | **建立測試 jail + git 同步管線** | — |
+| Phase 0 | 上線既有的 logger（純新增，已寫完） | T |
+| Phase 1 | 清理既有問題：拔 Vue/Pinia、合併 Role 對照表 | 0 |
+| Phase 2 | 新功能共用地基：discord.js 升級、排程器、狀態持久化 | 1 |
+| Phase 3 | 功能 2-1　語音暫時靜音指令 | 2 |
+| Phase 4 | 功能 2-2　每週投票 | 2 |
+| Phase 5 | 功能 2-3　每日日文分享 | 2 |
+| Phase 6 | 功能 2-4　帳號管理指令（NAS API） | 2 |
+| Phase 7 | 指令部署分離 + pm2 自動重啟 | 3～6 任一完成後 |
+
+> Phase 3～6 彼此獨立，Phase 2 完成後可依你想要的順序做。
+
+---
+
+## Phase T — 建立測試環境（git 同步）
+
+### 為什麼不用原本的 fstab 方案
+
+原方案是用 iocage `fstab` 把 NAS 上的 `BC_djs_bot_test` 以 nullfs 掛進測試 jail。**已廢除**：
+
+1. 掛載進來的位置無法執行 jail 內部程式。
+2. 資料夾權限會與 host 端連動，jail 內改不動也管不了。
+
+改為 **jail 內放實體檔案，用 git 當唯一同步管道**。jail 有自己的檔案系統與權限，上述兩個問題都不存在。
+
+### 架構
+
+| 角色 | 位置 | 職責 |
+|---|---|---|
+| 編輯 | NAS `\\<NAS>\…\Discord_bot\BC_djs_bot_test` | 改檔、commit、push。**禁止在此執行任何 process** |
+| 傳遞 | GitHub `origin` 的 **`test` 分支** | 唯一同步管道 |
+| 測試執行 | jail `DiscordBot_test`：`/root/BC_djs_bot` | 跑 bot、跑單元測試、可隨意重啟與弄壞 |
+| 正式執行 | jail `DiscordBot`：`/root/BC_djs_bot` | 維持手動複製，本階段不接 git |
+
+流程：**NAS 編輯 → push `test` → jail 每日 cron 或手動抓 → jail 內驗證 → 合併 `test` 到 `main` → 依既有方式部署正式站**。
+
+### 同步腳本（jail 內 `/root/update.sh`）
+
+```sh
+#!/bin/sh
+set -e
+cd /root/BC_djs_bot
+git fetch origin test
+before=$(git rev-parse HEAD)
+git reset --hard origin/test
+after=$(git rev-parse HEAD)
+if [ "$before" = "$after" ]; then echo "no change"; exit 0; fi
+if ! git diff --quiet "$before" "$after" -- package.json yarn.lock; then yarn install; fi
+pm2 restart bc-test --update-env
+```
+
+- 用 `reset --hard` 而非 `pull`：jail 端永遠不改檔案，硬對齊遠端才不會因衝突讓 cron 默默卡住。
+- 相依套件只在 `package.json` / `yarn.lock` 真的變動時才重裝。
+- cron 每天跑一次；需要時直接 `sh /root/update.sh` 手動抓，兩種方式同一支腳本。
+
+### 單元測試
+
+用 **vitest**：專案已有 `vite.config.js` 提供 `@/` 別名，vitest 直接沿用同一份設定，換任何其他 runner 都得先解決別名問題。測試一律在測試 jail 內 `yarn test` 執行。
+
+### 驗收
+
+1. NAS 改一行、push 到 `test`，jail 執行 `sh /root/update.sh` 後檔案內容一致。
+2. `crontab -l` 看得到排程，且手動觸發正常。
+3. jail 內 `yarn test` 跑通至少一個單元測試（拿 `logger.js` 當第一個對象）。
+4. 測試 jail 的 bot 連到**測試 Discord 伺服器**，對正式站零影響。
+
+### Progress
+
+- [x] T-1 建立 jail `DiscordBot-Test`（Node v24.14.1，git / yarn / pm2 皆已就緒）
+- [ ] T-2 GitHub 建立 `test` 分支；NAS 端把現有變更 commit 並 push
+- [ ] T-3 jail 內 `git clone -b test`，手動放入測試站 `.env`，`yarn install`
+- [ ] T-4 寫 `/root/update.sh` 並手動跑通一次
+- [ ] T-5 設定 cron 每日執行 `update.sh`
+- [ ] T-6 導入 vitest，跑通第一個單元測試
+- [ ] T-7 建立 `docs/ENVIRONMENTS.md` 記錄正式 / 測試環境差異
+- [ ] T-8 完成上述四項驗收
+
+### 待確認（阻擋 T-2、T-3）
+
+1. **GitHub repo 是 public 還是 private？** private 的話 jail 需要一把唯讀 deploy key。
+2. **`.gitignore` 目前排除 `yarn.lock`。** 這會讓 jail 每次自行解析版本，與正式站不一致。建議改為納入版控。
+
+---
+
+## Phase 0 — 上線既有的 logger
+
+程式碼已寫完（`src/core/logger.js`、`main.js` 的 handler、`.gitignore` 加 `logs/`），只差驗證與上線。
+留著它的理由：新功能有排程與外部 API，出錯時沒有 log 就查不動。
+
+**驗收**（測試 jail）：
+1. bot 啟動，log 檔內有啟動訊息、Node 版本與 pid
+2. `logs/` 產生當日檔案
+3. 觸發一次已知錯誤，log 有完整堆疊且 bot 不下線
+4. `kill -HUP <pid>` → log 出現「收到 SIGHUP」而非無聲消失
+
+**Progress**
+- [x] 0-1 `src/core/logger.js`
+- [x] 0-2 `main.js` process 層級 handler（含訊號處理）
+- [x] 0-3 `main.js` client error / shardError / shardDisconnect / warn 監聽
+- [x] 0-4 啟動訊息記錄版本與 pid
+- [x] 0-5 `.gitignore` 加入 `logs/`
+- [ ] 0-6 在測試 jail 完成四項驗收
+- [ ] 0-7 commit
+
+---
+
+## Phase 1 — 清理既有問題
+
+只做你點名的兩項，其餘 P2 問題留在 ISSUES.md，之後有需要再處理。
+
+| 子步驟 | 對應 | 修改內容 |
+|---|---|---|
+| 1-A | M-02 | 拔掉 Vue / Pinia：`src/store/app.js` 改為一般 ES module 單例物件；刪 `src/core/vue.js`；`main.js` 移除 `vueInit()`；所有 `useAppStroe()` 改為 import `appStore`；順手修掉 `clint` / `commandsActionMap` 的鍵名錯字；`package.json` 移除 `vue`、`pinia` |
+| 1-B | M-03 | 新增 `src/config/roleMap.js` 存唯一一份 emoji→roleId 對照表；`Role_Add_Emoji` / `Role_Remove_Emoji` 改為共用 handler，只差 `add` / `remove` |
+| 1-C | F-01、F-02 | 併進 1-B 一起做：共用 handler 開頭加 `if (reaction.partial) await reaction.fetch()`，成員改用 `await guild.members.fetch(user.id)`。不做這兩項，重構完的 Role 功能在 bot 重啟後照樣靜默失效 |
+| 1-D | C-03 | 併進 1-B：catch 區塊改用 logger，通知管理頻道改成自帶 try/catch 的安全函式（頻道取不到就只寫 log），避免錯誤處理本身把 bot 打掛 |
+
+**限制**：此階段不改變任何對外行為，emoji 與身分組的對應關係必須與現況完全一致。
+
+**驗收**（測試伺服器）：
+1. bot 正常啟動，斜線指令與關鍵字回覆行為不變
+2. bot 重啟後（不先發新訊息），對既有身分組訊息加反應 → 身分組正確發放
+3. 移除反應 → 身分組正確收回
+4. 對 bot 無權限操作的身分組加反應 → log 記錄 50013，bot 不下線
+
+**Progress**
+- [ ] 1-A 移除 Vue/Pinia，改用單例物件
+- [ ] 1-B 抽出 `roleMap.js` + 共用 handler
+- [ ] 1-C partial fetch + members.fetch
+- [ ] 1-D catch 改用 logger + 安全通知函式
+- [ ] 1-E 驗收
+- [ ] 1-F commit
+
+---
+
+## Phase 2 — 新功能共用地基
+
+四個新功能有三個共同需求，先一次做好，避免各自造輪子。
+
+| 子步驟 | 內容 | 為什麼 |
+|---|---|---|
+| 2-A | 升級 discord.js 到 v14.16 以上 | 目前 14.13.0 沒有原生 Poll API。Phase 4 的投票用原生 poll，Discord 端就會自動計票與到期，不必自己數 reaction |
+| 2-B | 新增 `src/core/scheduler.js`，以 `node-cron` 建立排程器，時區固定 `Asia/Taipei` | Phase 4、5 都要定時觸發。用 in-process 排程而非 jail 的 crontab，理由：排程規則跟程式碼一起進版控，且不必為了排程去碰 jail 系統設定 |
+| 2-C | 新增 `src/core/state.js`，以單一 JSON 檔（`data/state.json`，加入 `.gitignore`）存需要跨重啟保留的狀態 | Phase 3 的靜音到期時間、Phase 4 的投票追蹤都得撐過 bot 重啟。用 JSON 檔而非資料庫，理由：資料量極小，不值得為它在 jail 裡多裝一個服務 |
+| 2-D | `main.js` 啟動時載入 state 並重新掛回未完成的排程 | 沒有這步，bot 一重啟所有計時就消失 |
+
+**驗收**：
+1. 升級後既有功能全部照舊（重跑 Phase 1 的四項驗收）
+2. 排程器能觸發一個每分鐘印一行 log 的測試任務，時間為台北時間
+3. 寫入 state 後重啟 bot，內容仍在
+
+**Progress**
+- [ ] 2-A 升級 discord.js
+- [ ] 2-B `scheduler.js`
+- [ ] 2-C `state.js`
+- [ ] 2-D 啟動時還原排程
+- [ ] 2-E 驗收
+- [ ] 2-F commit
+
+---
+
+## Phase 3 — 功能 2-1　語音暫時靜音
+
+**需求**：把指定成員在語音頻道做**伺服器端靜音**，時間到自動解除。時間由指令參數選擇。
+
+**設計**：
+- 新增 `src/commands/vmute/index.js`
+- 參數：`user`（必填，成員）、`duration`（必填，選單：60 / 120 / 180 / 360 秒）、`reason`（選填）
+- 權限：`setDefaultMemberPermissions(PermissionFlagsBits.MuteMembers)`，只有具備「靜音成員」權限的人看得到、用得到
+- 實作：`await member.voice.setMute(true, reason)`；到期時 `setMute(false)`
+- 到期時間寫進 Phase 2-C 的 state；bot 重啟時由 2-D 還原，已過期的立即解除
+- 邊界處理：成員不在語音頻道 → 回覆提示不執行；已被靜音 → 覆蓋為新的到期時間；bot 權限不足（50013）→ 回覆友善訊息並寫 log
+
+**注意**：這是伺服器靜音，不是 Discord 內建的 timeout。內建 timeout 會連文字訊息一起禁掉，且到期由 Discord 端處理；伺服器靜音只影響語音，但**到期解除得由我們自己記時**，所以才需要 Phase 2-C / 2-D。
+
+**驗收**：
+1. 對語音中的成員下 `/vmute 60` → 立刻靜音，60 秒後自動解除
+2. 靜音期間重啟 bot → 剩餘時間到了仍會自動解除
+3. 對不在語音頻道的人下指令 → 明確提示，bot 不下線
+4. 無「靜音成員」權限的一般成員看不到這個指令
+
+**待確認**
+- 360 秒（6 分鐘）這個級距是不是筆誤？前三個是 1/2/3 分鐘，第四個跳到 6 分鐘。要 240 秒還是照 360？
+
+**Progress**
+- [ ] 3-A 指令骨架與參數
+- [ ] 3-B setMute + 到期解除
+- [ ] 3-C state 持久化與重啟還原
+- [ ] 3-D 邊界處理與錯誤訊息
+- [ ] 3-E 驗收
+- [ ] 3-F commit
+
+---
+
+## Phase 4 — 功能 2-2　每週投票
+
+**需求**：`maple-story` 頻道底下的討論串，每週日發起投票，週二前統計人數。投票標題為該討論串名稱，選項為固定的九個時段。
+
+**選項**（固定順序）：
+星期二、星期三、星期四、星期五、星期六下午、星期六晚上、星期日下午、星期日晚上、星期一
+
+**設計**：
+- 新增 `src/jobs/weeklyPoll.js`，由 Phase 2-B 的排程器觸發
+- 每週日固定時間，對目標討論串各發一則原生 poll，標題用討論串名稱，選項為上述九項，允許複選
+- poll 到期時間設為到週二統計時間為止，由 Discord 端自動結束並公布結果
+- 發出的 poll 訊息 id 記入 state，週二排程時讀回結果彙整成一則摘要貼出
+
+**待確認**（阻擋開工）
+1. `maple-story` 的頻道 ID？要發投票的是**該頻道下所有討論串**，還是你指定的幾串？
+2. 週日發起的**確切時間**、週二統計的**確切時間**？
+3. 投票是否允許複選？（時段調查通常是複選，我先假設允許）
+4. 統計摘要要貼在原討論串，還是集中貼在 `maple-story` 頻道？
+
+**Progress**
+- [ ] 4-A 確認上述四項
+- [ ] 4-B 發起投票的 job
+- [ ] 4-C 週二統計與摘要
+- [ ] 4-D 驗收
+- [ ] 4-E commit
+
+---
+
+## Phase 5 — 功能 2-3　每日日文分享
+
+**需求**：在 `日本語コーナー` 頻道每天九點發一則日文單字分享（含例句），或一則新聞。
+
+**設計**：
+- 新增 `src/jobs/dailyJapanese.js`，由排程器每天 09:00（台北時間）觸發
+- 以 embed 發送，內容含單字、讀音、詞性、中文意思、例句與例句翻譯
+- 記錄已發過的項目到 state，避免短期內重複
+
+**待確認**（阻擋開工）
+1. **內容從哪來？** 三種可能，需要你選一個：
+   - 我建一份本地單字表（JSON），bot 每天輪流挑一則 — 內容可控、零外部相依，但要先有一份表
+   - 抓 NHK「やさしい日本語」新聞 RSS，每天貼一則 — 零維護，但只有新聞、沒有單字例句
+   - 呼叫外部 LLM API 產生 — 內容最豐富，但要 API key 與費用
+2. 頻道 ID？
+3. 九點是台北時間還是日本時間？
+
+**Progress**
+- [ ] 5-A 確認內容來源與頻道
+- [ ] 5-B 內容取得
+- [ ] 5-C 每日排程與 embed 發送
+- [ ] 5-D 驗收
+- [ ] 5-E commit
+
+---
+
+## Phase 6 — 功能 2-4　帳號管理指令（NAS API）
+
+**需求**：透過 NAS 提供的 API，用兩個斜線指令完成帳號創立與更新。
+
+**設計**：
+- 新增 `src/core/nasApi.js` 統一封裝呼叫（base URL 與憑證放 `.env`，逾時與錯誤一律走 logger）
+- `src/commands/account-create/index.js`、`src/commands/account-update/index.js`
+- 權限：預設限管理員，避免任何人都能開帳號
+- 回覆一律用 ephemeral，避免帳號資訊洩漏到頻道
+
+**待確認**（阻擋開工，且是四個功能中資訊最少的）
+1. 這裡的「帳號」是**哪個系統**的帳號？（TrueNAS 使用者？某個服務的會員？）
+2. NAS 端的 API **已經存在**，還是也要一起做？若已存在，請給端點、方法、參數與認證方式。
+3. 兩個指令各要帶哪些參數？
+4. 誰可以用？（管理員限定，還是特定身分組）
+
+**Progress**
+- [ ] 6-A 確認 API 規格與權限
+- [ ] 6-B `nasApi.js` 封裝
+- [ ] 6-C 兩個指令
+- [ ] 6-D 驗收
+- [ ] 6-E commit
+
+---
+
+## Phase 7 — 指令部署分離 + pm2
+
+新增四個指令後，M-01（每次啟動都重打指令註冊 API）的風險比之前更高，該處理了。
+
+| 子步驟 | 對應 | 內容 |
+|---|---|---|
+| 7-A | M-01 | 新增 `src/scripts/deploy-commands.js` 與 `npm run deploy`；`loadCommands()` 改為只建立 action 對照表，不再呼叫 REST |
+| 7-B | M-01 | 雜湊護欄：deploy 時把 payload 的 SHA-256 存進 `.commands-hash.json`（加入 `.gitignore`），內容未變就跳過 PUT |
+| 7-C | M-08、E-01 | jail 內以 pm2 執行，`ecosystem.config.cjs` 指定絕對 `cwd`（避免 M-05 的 CWD 問題）、`exp_backoff_restart_delay`、`max_restarts`，並設定 jail 開機自啟 |
+| 7-D | C-07 | pm2 上線後，`uncaughtException` 由「記錄後繼續跑」改為「記錄後 exit」，交給 pm2 重啟 |
+
+**驗收**：
+1. `npm run deploy` 正確註冊指令；第二次執行顯示「內容未變、跳過」
+2. `npm run dev` 啟動時不再打 REST
+3. 手動 kill 行程 → pm2 自動拉起
+4. 連續崩潰時重啟間隔逐次拉長
+
+**Progress**
+- [ ] 7-A deploy-commands 腳本
+- [ ] 7-B 雜湊護欄
+- [ ] 7-C pm2 設定與開機自啟
+- [ ] 7-D uncaughtException 改為 exit
+- [ ] 7-E 驗收
+- [ ] 7-F commit
+
+---
+
+## 待使用者決定的事項（彙整）
+
+| # | 事項 | 阻擋 |
+|---|---|---|
+| 1 | GitHub repo 是 public 還是 private？ | T-2 |
+| 2 | `yarn.lock` 是否納入版控？ | T-3 |
+| 3 | 靜音的 360 秒是筆誤還是刻意？ | Phase 3 |
+| 4 | `maple-story` 頻道 ID、目標討論串範圍、發起與統計的確切時間、是否複選、摘要貼哪 | Phase 4 |
+| 5 | 日文分享的內容來源（本地單字表 / NHK RSS / LLM API）、頻道 ID、九點的時區 | Phase 5 |
+| 6 | 「帳號」是哪個系統的？NAS API 是否已存在、規格為何、誰可以用 | Phase 6 |

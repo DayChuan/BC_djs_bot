@@ -4,7 +4,7 @@
     "dev": "vite-node src/main.js"
   },
   "dependencies": {
-    "discord.js": "^14.11.0",
+    "discord.js": "^14.13.0",
     "dotenv": "^16.3.1",
     "fast-glob": "^3.3.1",
     "pinia": "^2.1.4",

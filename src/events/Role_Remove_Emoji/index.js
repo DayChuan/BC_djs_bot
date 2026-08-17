@@ -72,6 +72,6 @@ export const action = async(reaction, user) => {
     }
     catch(e){
         //傳送錯誤訊息到管理員群組
-        reaction.message.guild.channels.cache.get(process.env.AdminChannel_ID).send('Catch the error when Role_add by emoji : ' + e);
+        reaction.message.guild.channels.cache.get(process.env.AdminChannel_ID).send('Catch the error when Role_remove by emoji : ' + e);
     }
 }    
