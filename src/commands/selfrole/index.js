@@ -1,5 +1,5 @@
 import {MessageFlags, PermissionFlagsBits, SlashCommandBuilder} from 'discord.js'
-import {MAX_ROLES, addRole, getRoles, removeRole, setEmoji} from '@/core/selfRoles'
+import {MAX_ROLES, addRole, getDefaultEmoji, getRoles, removeRole, setEmoji} from '@/core/selfRoles'
 import logger from '@/core/logger'
 
 //維護「可自助領取的身分組」清單。
@@ -63,6 +63,15 @@ const normalizeEmojiInput = (raw) => {
     return {ok: false}
 }
 
+//被拒絕的情況也要留下紀錄，否則使用者回報「加不進去」時完全無從查起
+const reject = (ctx, sub, role, message) => {
+    logger.warn(
+        `/selfrole ${sub} 被拒絕：by=${ctx.user.tag} ` +
+        `role=${role ? `${role.name}(${role.id})` : '-'} 原因=${message}`
+    )
+    return message
+}
+
 const checkRoleUsable = async(ctx, role) => {
     //@everyone 的 id 等於伺服器 id，不能當身分組發放
     if(role.id === ctx.guild.id) return '不能把 @everyone 加入清單。'
@@ -81,22 +90,28 @@ const handleAdd = async(ctx) => {
     const role = ctx.options.getRole('role')
 
     const problem = await checkRoleUsable(ctx, role)
-    if(problem) return problem
+    if(problem) return reject(ctx, 'add', role, problem)
 
-    const emoji = normalizeEmojiInput(ctx.options.getString('emoji'))
-    if(!emoji.ok) return '圖示格式不正確，請貼一個 emoji 或伺服器自訂表情。'
+    const input = normalizeEmojiInput(ctx.options.getString('emoji'))
+    if(!input.ok){
+        return reject(ctx, 'add', role, '圖示格式不正確，請貼一個 emoji 或伺服器自訂表情。')
+    }
 
-    const result = addRole(role.id, role.name, emoji.value)
-    if(!result.ok) return REASON_TEXT[result.reason]
+    //沒指定圖示時，沿用環境檔對照表裡原本的那個。
+    //否則「移除後再加回來」會把原本的圖示弄丟。
+    const emoji = input.value || getDefaultEmoji(role.id)
 
-    logger.info(`身分組清單新增：${role.name}(${role.id}) emoji=${emoji.value || '無'} by=${ctx.user.tag}`)
-    return `已把 ${emoji.value ? `${emoji.value} ` : ''}「${role.name}」加入可領取清單。`
+    const result = addRole(role.id, role.name, emoji)
+    if(!result.ok) return reject(ctx, 'add', role, REASON_TEXT[result.reason])
+
+    logger.info(`身分組清單新增：${role.name}(${role.id}) emoji=${emoji || '無'} by=${ctx.user.tag}`)
+    return `已把 ${emoji ? `${emoji} ` : ''}「${role.name}」加入可領取清單。`
 }
 
 const handleRemove = async(ctx) => {
     const role = ctx.options.getRole('role')
     const result = removeRole(role.id)
-    if(!result.ok) return REASON_TEXT[result.reason]
+    if(!result.ok) return reject(ctx, 'remove', role, REASON_TEXT[result.reason])
 
     logger.info(`身分組清單移除：${role.name}(${role.id}) by=${ctx.user.tag}`)
     return `已把「${role.name}」移出可領取清單。已經領過的人不會被收回身分組。`
@@ -106,10 +121,12 @@ const handleEmoji = async(ctx) => {
     const role = ctx.options.getRole('role')
 
     const emoji = normalizeEmojiInput(ctx.options.getString('emoji'))
-    if(!emoji.ok) return '圖示格式不正確，請貼一個 emoji 或伺服器自訂表情。'
+    if(!emoji.ok){
+        return reject(ctx, 'emoji', role, '圖示格式不正確，請貼一個 emoji 或伺服器自訂表情。')
+    }
 
     const result = setEmoji(role.id, emoji.value)
-    if(!result.ok) return REASON_TEXT[result.reason]
+    if(!result.ok) return reject(ctx, 'emoji', role, REASON_TEXT[result.reason])
 
     logger.info(`身分組圖示設定：${role.name}(${role.id}) emoji=${emoji.value || '清除'} by=${ctx.user.tag}`)
     return emoji.value
@@ -121,14 +138,18 @@ const handleList = async(ctx) => {
     const roles = getRoles()
     if(roles.length === 0) return '目前清單是空的，用 `/selfrole add` 新增。'
 
-    const lines = roles.map((entry, index) => {
+    const lines = []
+    for(const [index, entry] of roles.entries()){
+        //只查快取的話，快取沒命中就會被誤判成「已刪除」。
+        //跟面板一樣，查不到再向 API 要一次，真的取不到才當作被刪掉。
         const role = ctx.guild.roles.cache.get(entry.id)
+            || await ctx.guild.roles.fetch(entry.id).catch(() => null)
         const icon = entry.emoji ? `${entry.emoji} ` : ''
-        //清單裡有但伺服器上找不到，代表身分組被刪掉了
-        return role
+
+        lines.push(role
             ? `${index + 1}. ${icon}${role.name}`
-            : `${index + 1}. ⚠️ ${icon}${entry.name || '(未命名)'} — 已從伺服器刪除，建議移除`
-    })
+            : `${index + 1}. ⚠️ ${icon}${entry.name || '(未命名)'} — 已從伺服器刪除，建議移除`)
+    }
 
     return `目前可領取的身分組（${roles.length}/${MAX_ROLES}）：\n${lines.join('\n')}`
 }

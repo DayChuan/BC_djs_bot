@@ -25,6 +25,9 @@ const EMOJI_BY_ROLE_ID = new Map(
         .map(([key, id]) => [id, key])
 )
 
+//環境檔裡原本就有的 emoji。移除後重新加入時用它補回來，避免圖示不見。
+export const getDefaultEmoji = (roleId) => EMOJI_BY_ROLE_ID.get(roleId) || ''
+
 //這份清單刻意不進版控(data/ 已在 .gitignore)：
 //正式站與測試站各自維護一份，git 更新不會覆蓋，管理員也不必改程式碼。
 let cache = null
