@@ -15,6 +15,22 @@ export const PANEL_SELECT_ID = 'role-panel-select'
 
 const COLOR = 0x5865F2
 
+//已擁有 / 未擁有的標記
+const MARK_OWNED = '✅'
+const MARK_NONE = '▫️'
+
+//把儲存的 emoji 字串轉成選單選項要的格式。
+//自訂表情存的是 <:name:id> 或 <a:name:id>，內建 emoji 就是字元本身。
+export const parseEmoji = (raw) => {
+    const text = String(raw || '').trim()
+    if(!text) return null
+
+    const custom = /^<(a?):([\w-]+):(\d+)>$/.exec(text)
+    if(custom) return {animated: custom[1] === 'a', name: custom[2], id: custom[3]}
+
+    return {name: text}
+}
+
 //頻道裡常駐的那則訊息。對所有人都一樣，所以不能顯示個人狀態，
 //只放一顆按鈕，個人化的內容等按下去之後用 ephemeral 呈現。
 export const buildPanelMessage = () => {
@@ -33,16 +49,15 @@ export const buildPanelMessage = () => {
     return {embeds: [embed], components: [row]}
 }
 
-//把清單裡的 id 轉成伺服器上的實際身分組物件。
-//查不到的(身分組被刪掉)會被排除，並回報給呼叫端。
-const resolveRoles = async(guild) => {
-    const entries = getRoles()
+//把清單裡的 id 轉成伺服器上的實際身分組。
+//查不到的(身分組被刪掉)會被排除，並留下紀錄。
+const resolveEntries = async(guild) => {
     const found = []
     const missing = []
 
-    for(const entry of entries){
+    for(const entry of getRoles()){
         const role = guild.roles.cache.get(entry.id) || await guild.roles.fetch(entry.id).catch(() => null)
-        if(role) found.push(role)
+        if(role) found.push({role, emoji: entry.emoji})
         else missing.push(entry)
     }
 
@@ -54,7 +69,7 @@ const resolveRoles = async(guild) => {
     }
 
     //順手把名稱快照更新成實際名稱
-    refreshNames(new Map(found.map((role) => [role.id, role.name])))
+    refreshNames(new Map(found.map((item) => [item.role.id, item.role.name])))
 
     return found
 }
@@ -62,23 +77,26 @@ const resolveRoles = async(guild) => {
 //按下按鈕之後，只給該使用者看的個人面板。
 //因為是 ephemeral，選單可以帶 default 勾選 —— 使用者看得到自己目前的狀態。
 export const buildMemberPanel = async(guild, member, changes) => {
-    const roles = await resolveRoles(guild)
+    const entries = await resolveEntries(guild)
 
     const embed = new EmbedBuilder()
         .setColor(COLOR)
         .setTitle('你的身分組')
 
-    if(roles.length === 0){
+    if(entries.length === 0){
         embed.setDescription(
             '目前沒有開放自助領取的身分組。\n管理員可以用 `/selfrole add` 新增。'
         )
         return {embeds: [embed], components: []}
     }
 
-    //✅ 已擁有 / ⬜ 未擁有，讓使用者一眼看到現況
+    //✅ 已擁有 / ▫️ 未擁有，讓使用者一眼看到現況
     embed.setDescription(
-        roles
-            .map((role) => `${member.roles.cache.has(role.id) ? '✅' : '⬜'} ${role.name}`)
+        entries
+            .map(({role, emoji}) => {
+                const mark = member.roles.cache.has(role.id) ? MARK_OWNED : MARK_NONE
+                return `${mark} ${emoji ? `${emoji} ` : ''}${role.name}`
+            })
             .join('\n')
     )
 
@@ -100,14 +118,19 @@ export const buildMemberPanel = async(guild, member, changes) => {
     const select = new StringSelectMenuBuilder()
         .setCustomId(PANEL_SELECT_ID)
         .setPlaceholder('勾選你要的身分組(取消勾選就是退出)')
-        .setMinValues(0)                    //可以全部取消
-        .setMaxValues(roles.length)         //可以全選
+        .setMinValues(0)                        //可以全部取消
+        .setMaxValues(entries.length)           //可以全選
         .addOptions(
-            roles.map((role) => ({
-                label: role.name.slice(0, 100),     //Discord 限制 100 字
-                value: role.id,
-                default: member.roles.cache.has(role.id),   //預先勾選目前已有的
-            }))
+            entries.map(({role, emoji}) => {
+                const option = {
+                    label: role.name.slice(0, 100),             //Discord 限制 100 字
+                    value: role.id,
+                    default: member.roles.cache.has(role.id),   //預先勾選目前已有的
+                }
+                const parsed = parseEmoji(emoji)
+                if(parsed) option.emoji = parsed
+                return option
+            })
         )
 
     return {

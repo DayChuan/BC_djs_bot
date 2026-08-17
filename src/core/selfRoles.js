@@ -14,6 +14,17 @@ const VERSION = 1
 //Discord 單一下拉選單最多 25 個選項，超過就放不下
 export const MAX_ROLES = 25
 
+//環境檔的 roles 是「emoji → id」，這裡反過來查，讓初始清單能沿用原本訊息上的 emoji。
+//鍵如果是純英數(例如 Minecraft)，那是伺服器自訂表情的名稱而不是 emoji 本身，
+//少了表情 ID 就沒辦法放進選單，所以略過，之後用 /selfrole emoji 補。
+const isUnicodeEmoji = (key) => !/^[\w-]+$/.test(key)
+
+const EMOJI_BY_ROLE_ID = new Map(
+    Object.entries(config.roles)
+        .filter(([key, id]) => id && isUnicodeEmoji(key))
+        .map(([key, id]) => [id, key])
+)
+
 //這份清單刻意不進版控(data/ 已在 .gitignore)：
 //正式站與測試站各自維護一份，git 更新不會覆蓋，管理員也不必改程式碼。
 let cache = null
@@ -25,7 +36,7 @@ const buildSeed = () => ({
     updatedAt: new Date().toISOString(),
     roles: Object.values(config.roles)
         .filter(Boolean)
-        .map((id) => ({id, name: ''})),
+        .map((id) => ({id, name: '', emoji: EMOJI_BY_ROLE_ID.get(id) || ''})),
 })
 
 const save = (data) => {
@@ -40,6 +51,22 @@ const save = (data) => {
     }
 }
 
+//舊版的檔案沒有 emoji 欄位，載入時補上，不必刪檔重來
+const migrate = (data) => {
+    let changed = false
+    for(const role of data.roles){
+        if(role.emoji === undefined){
+            role.emoji = EMOJI_BY_ROLE_ID.get(role.id) || ''
+            changed = true
+        }
+    }
+    if(changed){
+        logger.info('selfRoles.json 補上 emoji 欄位')
+        save(data)
+    }
+    return data
+}
+
 const load = () => {
     if(cache) return cache
 
@@ -47,7 +74,7 @@ const load = () => {
         if(fs.existsSync(FILE_PATH)){
             const parsed = JSON.parse(fs.readFileSync(FILE_PATH, 'utf8'))
             if(parsed && Array.isArray(parsed.roles)){
-                cache = parsed
+                cache = migrate(parsed)
                 return cache
             }
             logger.warn(`${FILE_PATH} 格式不正確(缺少 roles 陣列)，改用環境檔的預設清單`)
@@ -72,12 +99,12 @@ export const getRoles = () => load().roles.map((role) => ({...role}))
 
 export const getRoleIds = () => load().roles.map((role) => role.id)
 
-export const addRole = (id, name) => {
+export const addRole = (id, name, emoji) => {
     const data = load()
     if(data.roles.some((role) => role.id === id)) return {ok: false, reason: 'already'}
     if(data.roles.length >= MAX_ROLES) return {ok: false, reason: 'full'}
 
-    data.roles.push({id, name: name || ''})
+    data.roles.push({id, name: name || '', emoji: emoji || ''})
     data.updatedAt = new Date().toISOString()
     return save(data) ? {ok: true} : {ok: false, reason: 'io'}
 }
@@ -88,6 +115,16 @@ export const removeRole = (id) => {
     if(index < 0) return {ok: false, reason: 'missing'}
 
     data.roles.splice(index, 1)
+    data.updatedAt = new Date().toISOString()
+    return save(data) ? {ok: true} : {ok: false, reason: 'io'}
+}
+
+export const setEmoji = (id, emoji) => {
+    const data = load()
+    const role = data.roles.find((item) => item.id === id)
+    if(!role) return {ok: false, reason: 'missing'}
+
+    role.emoji = emoji || ''
     data.updatedAt = new Date().toISOString()
     return save(data) ? {ok: true} : {ok: false, reason: 'io'}
 }
@@ -111,3 +148,8 @@ export const refreshNames = (nameById) => {
         save(data)
     }
 }
+
+//啟動時就把清單讀進來(或建立)，不要等到第一次有人下指令。
+//這個模組會被 interactionCreate import，而 loadEvents() 在啟動階段就會載入事件檔。
+const initial = load()
+logger.info(`可自助領取的身分組清單：${initial.roles.length} 組(上限 ${MAX_ROLES})`)
