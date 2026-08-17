@@ -1,6 +1,7 @@
 import {Collection, REST, Routes} from 'discord.js'
 import fg, { async } from 'fast-glob'      //讀取檔案用的套件
 import {useAppStroe} from '@/store/app'
+import config from '@/config'
 
 //送API請求給discord官方
 const updateSlashCommands = async(commands, GUILD_ID) =>{
@@ -9,8 +10,7 @@ const updateSlashCommands = async(commands, GUILD_ID) =>{
         //discord.js的function 目的是簡化API請求流程
         //也可以找不同的Function來用
         Routes.applicationGuildCommands(
-            process.env.APPLICATION_ID,
-            // process.env.GUILD_ID,
+            config.applicationId,
             GUILD_ID
         ),
         {
@@ -35,10 +35,9 @@ export const loadCommands = async() => {
         actions.set(cmd.command.name, cmd.action)
     }
     // 2023_1129 突然想到一次註冊多個伺服器
-    const GuildId = process.env.GUILD_ID.split(',');
-
-    for(let i=0;i<GuildId.length;i++){
-        await updateSlashCommands(commands,GuildId[i])
+    // 2026_0817 伺服器清單改由 src/config/environments/<環境>.js 提供
+    for(const guildId of config.guildIds){
+        await updateSlashCommands(commands, guildId)
     }
     //////////////////////////////////////////////////
     appStroe.commandActionMap = actions
