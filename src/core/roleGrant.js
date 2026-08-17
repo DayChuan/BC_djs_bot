@@ -34,6 +34,22 @@ export const applyRole = async(guild, userId, roleId, mode) => {
     return member
 }
 
+//把成員的身分組對齊「選單裡勾選的結果」。
+//managedIds 是這次介面所管理的範圍，範圍外的身分組一律不動 —— 這點很重要，
+//否則使用者按一次面板就會被拔掉管理員、佈告等其他身分組。
+export const syncRoles = async(member, selectedIds, managedIds) => {
+    const selected = new Set(selectedIds)
+
+    const toAdd = managedIds.filter((id) => selected.has(id) && !member.roles.cache.has(id))
+    const toRemove = managedIds.filter((id) => !selected.has(id) && member.roles.cache.has(id))
+
+    //陣列版本的 add/remove 只會送一次 API，比逐一呼叫省很多
+    if(toAdd.length > 0) await member.roles.add(toAdd)
+    if(toRemove.length > 0) await member.roles.remove(toRemove)
+
+    return {added: toAdd, removed: toRemove}
+}
+
 //產生 MessageReactionAdd / MessageReactionRemove 的處理函式。
 //兩者的流程完全相同，只差最後是 add 還是 remove。
 export const createRoleReactionHandler = (mode) => {

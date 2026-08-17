@@ -1,13 +1,113 @@
-import {Events} from 'discord.js'
+import {Events, MessageFlags} from 'discord.js'
 import {useAppStroe} from '@/store/app'
+import logger from '@/core/logger'
+import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePanel'
+import {syncRoles} from '@/core/roleGrant'
+import {getRoleIds} from '@/core/selfRoles'
 
 export const event = {
-    name : Events.InteractionCreate
+    name: Events.InteractionCreate
+}
+
+//依 interaction 當下的狀態選對回覆方式：
+//初次回應只能有一次，已經 defer 或回覆過還呼叫 reply() 會拋 InteractionAlreadyReplied。
+//而這個函式是在 catch 裡被呼叫的，外面沒有人接手，所以它自己也要包 try/catch，
+//絕對不能再往外拋(ISSUES.md 的 C-03 就是錯誤處理自己爆炸)。
+const safeRespond = async(interaction, content) => {
+    try{
+        const payload = {content, flags: MessageFlags.Ephemeral}
+        if(interaction.deferred || interaction.replied) await interaction.followUp(payload)
+        else await interaction.reply(payload)
+    }
+    catch(e){
+        logger.error('回覆 interaction 失敗(只記錄，不再往外拋)：', e)
+    }
+}
+
+const handleChatInputCommand = async(interaction) => {
+    const appStroe = useAppStroe()
+    const map = appStroe.commandActionMap
+
+    //開機競態：loadCommands() 還沒把 map 填好就有人下指令(ISSUES.md 的 C-04)。
+    //原本會對 null 呼叫 .get() 然後終止行程。
+    if(!map){
+        logger.warn(`指令 ${interaction.commandName} 在指令表建立完成前被呼叫`)
+        await safeRespond(interaction, '機器人還在啟動中，請幾秒後再試一次。')
+        return
+    }
+
+    //指令曾經註冊過、之後資料夾被移除時，Discord 端仍保留該指令(ISSUES.md 的 C-05)。
+    //原本會變成 action is not a function 然後終止行程。
+    const action = map.get(interaction.commandName)
+    if(typeof action !== 'function'){
+        logger.warn(`收到未知的指令：${interaction.commandName}`)
+        await safeRespond(interaction, '這個指令已經失效了，請通知管理員。')
+        return
+    }
+
+    await action(interaction)
+}
+
+//點下面板按鈕：用 ephemeral 顯示個人化的身分組面板。
+//先 defer 是因為後面要抓成員與身分組，不一定來得及在 3 秒內完成。
+const handlePanelOpen = async(interaction) => {
+    await interaction.deferReply({flags: MessageFlags.Ephemeral})
+    const member = await interaction.guild.members.fetch(interaction.user.id)
+    await interaction.editReply(await buildMemberPanel(interaction.guild, member))
+}
+
+//送出選單：把身分組對齊勾選結果，然後就地更新那則 ephemeral 訊息
+const handlePanelSelect = async(interaction) => {
+    await interaction.deferUpdate()
+
+    const member = await interaction.guild.members.fetch(interaction.user.id)
+    const {added, removed} = await syncRoles(member, interaction.values, getRoleIds())
+
+    const toRoles = (ids) => ids
+        .map((id) => interaction.guild.roles.cache.get(id))
+        .filter(Boolean)
+
+    if(added.length > 0 || removed.length > 0){
+        logger.info(
+            `面板調整身分組：user=${interaction.user.tag} ` +
+            `加入=[${toRoles(added).map((role) => role.name).join(',')}] ` +
+            `退出=[${toRoles(removed).map((role) => role.name).join(',')}]`
+        )
+    }
+
+    //改完一定要 force 重抓，否則快取還是舊的，畫面上的勾選狀態不會更新
+    const fresh = await interaction.guild.members.fetch({user: interaction.user.id, force: true})
+    await interaction.editReply(
+        await buildMemberPanel(interaction.guild, fresh, {
+            added: toRoles(added),
+            removed: toRoles(removed),
+        })
+    )
 }
 
 export const action = async(interaction) => {
-    if(!interaction.isChatInputCommand()) return
-    const appStroe = useAppStroe()
-    const action = appStroe.commandActionMap.get(interaction.commandName)
-    await action(interaction)
+    try{
+        if(interaction.isChatInputCommand()){
+            await handleChatInputCommand(interaction)
+            return
+        }
+        if(interaction.isButton() && interaction.customId === PANEL_BUTTON_ID){
+            await handlePanelOpen(interaction)
+            return
+        }
+        if(interaction.isStringSelectMenu() && interaction.customId === PANEL_SELECT_ID){
+            await handlePanelSelect(interaction)
+            return
+        }
+        //其他類型的 interaction 目前不處理
+    }
+    catch(e){
+        //原本整個檔案沒有 try/catch，任何錯誤都會終止行程
+        logger.error(
+            `處理 interaction 失敗：` +
+            `command=${interaction.commandName || '-'} customId=${interaction.customId || '-'}`,
+            e
+        )
+        await safeRespond(interaction, '執行時發生錯誤，管理員已收到紀錄。')
+    }
 }
