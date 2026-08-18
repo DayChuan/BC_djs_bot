@@ -19,6 +19,29 @@ const emptyStore = () => ({polls: {}})
 export const makePollId = (now = Date.now(), rand = Math.random()) =>
     `p_${now.toString(36)}${Math.floor(rand * 1296).toString(36).padStart(2, '0')}`
 
+//Discord 的選單一次最多 25 個選項，標籤最多 100 字
+export const MAX_OPTIONS = 25
+export const MAX_OPTION_LABEL = 100
+
+//把指令參數的「A,B,C」拆成選項。
+//全形逗號一起吃：中文輸入法下打出來的幾乎都是全形，
+//只認半形的話使用者會得到一個只有一個選項的投票，而且不知道為什麼。
+export const parseOptionsInput = (text) => {
+    const seen = new Set()
+    const options = []
+
+    for(const raw of String(text || '').split(/[,，]/)){
+        const label = raw.trim().slice(0, MAX_OPTION_LABEL)
+        if(!label) continue
+        //重複的選項會讓統計出現兩個一模一樣的欄位，直接去掉
+        if(seen.has(label)) continue
+        seen.add(label)
+        options.push({key: `o${options.length}`, label})
+    }
+
+    return options.slice(0, MAX_OPTIONS)
+}
+
 //把一個人的選擇寫進 poll(直接改傳入的物件)。
 //選單送回來的一定是「完整的當前選擇」，所以是整組覆蓋而不是累加。
 //選項清空 = 取消投票，直接把這個人從名單移除，避免留下一堆空票影響分母。
@@ -155,11 +178,21 @@ export const getPoll = (id) => enqueue(async () => {
     return clone(store.polls[id]) || null
 })
 
-//回傳所有 status === 'open' 的投票，bot 啟動時用它重新掛回排程
+//回傳所有 status === 'open' 的投票
 export const listOpenPolls = () => enqueue(async () => {
     const store = await load()
     return Object.values(store.polls)
         .filter((poll) => poll.status === 'open')
+        .map(clone)
+})
+
+//bot 啟動時用它重新掛回排程。
+//pending 是每週投票結算後排定的「下一輪」，還沒發出訊息，
+//漏掉它的話重啟一次就再也不會有下一輪了。
+export const listActivePolls = () => enqueue(async () => {
+    const store = await load()
+    return Object.values(store.polls)
+        .filter((poll) => poll.status === 'open' || poll.status === 'pending')
         .map(clone)
 })
 
@@ -209,6 +242,8 @@ export default {
     readPolls,
     getPoll,
     listOpenPolls,
+    listActivePolls,
+    parseOptionsInput,
     createPoll,
     updatePoll,
     deletePoll,

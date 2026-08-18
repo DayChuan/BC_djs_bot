@@ -186,6 +186,52 @@ describe('檔案持久化', () => {
     })
 })
 
+describe('parseOptionsInput', () => {
+    it('半形逗號分隔', () => {
+        expect(store.parseOptionsInput('星期二,星期三,星期四')).toEqual([
+            {key: 'o0', label: '星期二'},
+            {key: 'o1', label: '星期三'},
+            {key: 'o2', label: '星期四'},
+        ])
+    })
+
+    it('全形逗號也吃得下(中文輸入法打出來的都是全形)', () => {
+        expect(store.parseOptionsInput('紅，藍，綠')).toHaveLength(3)
+    })
+
+    it('去掉前後空白與空項目', () => {
+        expect(store.parseOptionsInput(' 紅 , , 藍 ,')).toEqual([
+            {key: 'o0', label: '紅'},
+            {key: 'o1', label: '藍'},
+        ])
+    })
+
+    it('重複的選項只留一個', () => {
+        expect(store.parseOptionsInput('紅,藍,紅')).toHaveLength(2)
+    })
+
+    it('超過 25 個只留前 25 個', () => {
+        const input = Array.from({length: 30}, (_, i) => `選項${i}`).join(',')
+        expect(store.parseOptionsInput(input)).toHaveLength(store.MAX_OPTIONS)
+    })
+
+    it('空字串或未填回空陣列，不會爆掉', () => {
+        expect(store.parseOptionsInput('')).toEqual([])
+        expect(store.parseOptionsInput(null)).toEqual([])
+    })
+})
+
+describe('listActivePolls', () => {
+    it('open 與 pending 都要撈到(pending 是每週投票的下一輪)', async () => {
+        const open = await store.createPoll(samplePoll({title: 'open'}))
+        const pending = await store.createPoll(samplePoll({title: 'pending', status: 'pending'}))
+        await store.createPoll(samplePoll({title: 'closed', status: 'closed'}))
+
+        const active = await store.listActivePolls()
+        expect(active.map((poll) => poll.id).sort()).toEqual([open.id, pending.id].sort())
+    })
+})
+
 describe('makePollId', () => {
     it('長度夠短，塞得進 Discord 的 customId 上限', () => {
         expect(store.makePollId(1755400000000, 0.5).length).toBeLessThan(20)

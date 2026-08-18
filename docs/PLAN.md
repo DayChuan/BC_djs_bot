@@ -261,8 +261,22 @@ pm2 restart bc-test --update-env
 - [x] 4-A-5 `tests/` 三支單元測試
 - [x] 4-A-6 測試 jail `yarn install` + `yarn test` 全數通過（42/42，2026-08-18）
 - [x] 4-A-7 commit（`e0e0b15`、`981a098`、`e8f969d`）
-- [ ] 4-B `/poll`
+- [x] 4-B-1 `src/core/pollRender.js` 投票訊息與結算報表
+- [x] 4-B-2 `src/core/pollService.js` 發布／結算／每週續辦／開機還原
+- [x] 4-B-3 `src/commands/poll/index.js` 指令與參數驗證
+- [x] 4-B-4 `interactionCreate` 分派、`ready` 開機還原
+- [x] 4-B-5 `tests/pollRender.test.js`、`tests/pollService.test.js`
+- [ ] 4-B-6 測試 jail `yarn test` 通過
+- [ ] 4-B-7 測試伺服器實機驗收（見下方五項）
+- [ ] 4-B-8 commit
 - [ ] 4-C `/quickpoll`
+
+**4-B 實機驗收**（測試伺服器）
+1. `/poll title:測試 options:紅,藍,綠 hours:1` → 出現投票訊息與一列選單；選一項後只有自己看得到確認訊息
+2. 加 `multi:true` → 選單可複選；取消全部勾選 → 回覆顯示「已取消你的投票」
+3. 加 `identity:楓之谷` → 多出第二列職業選單；選完後確認訊息顯示身分
+4. 把 `hours` 設成 1、手動把 `data/polls.json` 的 `closeAt` 改成過去時間並重啟 → 開機後立刻結算，貼出結果、原訊息元件消失、該筆從 JSON 消失
+5. `weekly:true` + 四個時間參數 → 結算後 JSON 裡出現一筆 `status: "pending"` 的下一輪，票數為空
 
 ---
 

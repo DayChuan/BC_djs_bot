@@ -4,6 +4,8 @@ import logger from '@/core/logger'
 import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePanel'
 import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
+import {parsePollCustomId} from '@/core/pollRender'
+import {handlePollSelect} from '@/core/pollService'
 
 export const event = {
     name: Events.InteractionCreate
@@ -85,6 +87,15 @@ const handlePanelSelect = async(interaction) => {
     )
 }
 
+//投票的選單。回覆一律 ephemeral：投了什麼只有自己看得到。
+//公開訊息刻意不顯示即時票數 —— 一來會有從眾效應，
+//二來每投一票就要編輯一次訊息，人多時很容易撞到速率限制。
+const handlePollVote = async(interaction, parsed) => {
+    await interaction.deferReply({flags: MessageFlags.Ephemeral})
+    const content = await handlePollSelect(interaction, parsed.kind, parsed.pollId)
+    await interaction.editReply(content)
+}
+
 export const action = async(interaction) => {
     try{
         if(interaction.isChatInputCommand()){
@@ -98,6 +109,13 @@ export const action = async(interaction) => {
         if(interaction.isStringSelectMenu() && interaction.customId === PANEL_SELECT_ID){
             await handlePanelSelect(interaction)
             return
+        }
+        if(interaction.isStringSelectMenu()){
+            const parsed = parsePollCustomId(interaction.customId)
+            if(parsed){
+                await handlePollVote(interaction, parsed)
+                return
+            }
         }
         //其他類型的 interaction 目前不處理
     }

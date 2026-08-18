@@ -1,5 +1,5 @@
 import {describe, it, expect, afterEach, vi} from 'vitest'
-import scheduler, {weeklyCron, chunkDelay, MAX_TIMEOUT} from '@/core/scheduler'
+import scheduler, {weeklyCron, chunkDelay, nextWeeklyDate, MAX_TIMEOUT} from '@/core/scheduler'
 
 afterEach(() => {
     scheduler.cancelAll()
@@ -22,6 +22,50 @@ describe('weeklyCron', () => {
     it('時間格式錯誤要拋錯', () => {
         expect(() => weeklyCron(1, '2000')).toThrow()
         expect(() => weeklyCron(1, '25:00')).toThrow()
+    })
+})
+
+describe('nextWeeklyDate', () => {
+    //2026-08-18T00:00:00Z = 台北時間 2026-08-18(星期二) 08:00
+    const tuesday0800 = new Date('2026-08-18T00:00:00.000Z')
+
+    it('同一天但時間還沒到 → 就是今天', () => {
+        expect(nextWeeklyDate(2, '20:00', tuesday0800).toISOString())
+            .toBe('2026-08-18T12:00:00.000Z')
+    })
+
+    it('同一天但時間已過 → 推到下週同一天', () => {
+        expect(nextWeeklyDate(2, '07:00', tuesday0800).toISOString())
+            .toBe('2026-08-24T23:00:00.000Z')
+    })
+
+    it('跨到本週稍後的日子', () => {
+        //台北星期日 2026-08-23 20:00 = UTC 12:00
+        expect(nextWeeklyDate(0, '20:00', tuesday0800).toISOString())
+            .toBe('2026-08-23T12:00:00.000Z')
+    })
+
+    it('台北的凌晨時段會落在前一天的 UTC，不能算錯', () => {
+        //台北星期三 2026-08-19 01:00 = UTC 2026-08-18 17:00
+        expect(nextWeeklyDate(3, '01:00', tuesday0800).toISOString())
+            .toBe('2026-08-18T17:00:00.000Z')
+    })
+
+    it('剛好等於現在這一刻算已經過去，推到下週(否則結算完會排回同一點)', () => {
+        //台北時間正好 08:00 星期二
+        expect(nextWeeklyDate(2, '08:00', tuesday0800).toISOString())
+            .toBe('2026-08-25T00:00:00.000Z')
+    })
+
+    it('不受系統時區影響：算出來的絕對時間固定', () => {
+        const result = nextWeeklyDate(2, '20:00', tuesday0800)
+        //台北 20:00 永遠是 UTC 12:00，台北沒有日光節約時間
+        expect(result.getUTCHours()).toBe(12)
+    })
+
+    it('參數不合法要拋錯', () => {
+        expect(() => nextWeeklyDate(9, '20:00', tuesday0800)).toThrow()
+        expect(() => nextWeeklyDate(2, '2000', tuesday0800)).toThrow()
     })
 })
 

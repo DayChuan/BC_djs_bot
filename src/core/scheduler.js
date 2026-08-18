@@ -20,13 +20,22 @@ export const chunkDelay = (remainMs) => {
     return Math.min(remainMs, MAX_TIMEOUT)
 }
 
-//把「星期幾 + HH:mm」轉成 cron 運算式。weekday: 0=星期日 ... 6=星期六
-export const weeklyCron = (weekday, time) => {
+//台北固定 UTC+8，沒有日光節約時間，所以偏移量可以寫死。
+//不用系統時區來算：jail 的時區設定被改掉時，投票的截止時間會跟著整個偏移，
+//而且是沒有任何錯誤訊息的那種偏移。
+export const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+export const parseWeekday = (weekday) => {
     const day = Number(weekday)
     if(!Number.isInteger(day) || day < 0 || day > 6){
         throw new Error(`weekday 必須是 0~6，收到：${weekday}`)
     }
+    return day
+}
 
+export const parseTimeOfDay = (time) => {
     const matched = /^(\d{1,2}):(\d{2})$/.exec(String(time).trim())
     if(!matched) throw new Error(`時間格式必須是 HH:mm，收到：${time}`)
 
@@ -34,7 +43,44 @@ export const weeklyCron = (weekday, time) => {
     const minute = Number(matched[2])
     if(hour > 23 || minute > 59) throw new Error(`時間超出範圍：${time}`)
 
+    return {hour, minute}
+}
+
+//把「星期幾 + HH:mm」轉成 cron 運算式。weekday: 0=星期日 ... 6=星期六
+export const weeklyCron = (weekday, time) => {
+    const day = parseWeekday(weekday)
+    const {hour, minute} = parseTimeOfDay(time)
     return `${minute} ${hour} * * ${day}`
+}
+
+//算出「下一個 星期X HH:mm(台北時間)」是什麼時候，回傳 Date。
+//剛好等於 from 的那一刻算已經過去，往後推一週 —— 否則結算完馬上又排到同一個時間點，
+//會變成無窮迴圈。
+export const nextWeeklyDate = (weekday, time, from = new Date()) => {
+    const day = parseWeekday(weekday)
+    const {hour, minute} = parseTimeOfDay(time)
+
+    const fromMs = from instanceof Date ? from.getTime() : new Date(from).getTime()
+    if(!Number.isFinite(fromMs)) throw new Error(`不合法的起算時間：${from}`)
+
+    //先把時間平移到台北，之後一律用 UTC 系列的 getter 讀，
+    //讀出來的就是台北的年月日與星期，過程中完全不碰系統時區。
+    const local = new Date(fromMs + TAIPEI_OFFSET_MS)
+    const deltaDays = (day - local.getUTCDay() + 7) % 7
+
+    const localTarget = Date.UTC(
+        local.getUTCFullYear(),
+        local.getUTCMonth(),
+        local.getUTCDate(),
+        hour,
+        minute,
+    ) + deltaDays * DAY_MS
+
+    //平移回真正的 UTC 時間軸
+    let target = localTarget - TAIPEI_OFFSET_MS
+    if(target <= fromMs) target += 7 * DAY_MS
+
+    return new Date(target)
 }
 
 /////////////////////////////// 排程註冊 ///////////////////////////////
@@ -123,5 +169,6 @@ export default {
     has,
     keys,
     weeklyCron,
+    nextWeeklyDate,
     chunkDelay,
 }
