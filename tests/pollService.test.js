@@ -2,13 +2,16 @@ import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import * as store from '@/core/pollStore'
+import * as service from '@/core/pollService'
+import scheduler from '@/core/scheduler'
 
-//pollService 與 pollStore 必須是同一次 resetModules 之後載入的，
-//否則 service 會操作到另一份 store 實體，測試看起來全綠但什麼都沒驗到。
+//全部用靜態 import，整支檔案只載入一次。
+//早期版本在 beforeEach 裡 vi.resetModules() + 動態 import，
+//那會連帶把 pollService → pollRender → discord.js 整包重新載入，
+//每個案例重來一次，在測試 jail 裡會直接卡死到跑不完。
+//現在改成「換環境變數 + 清快取」就能讓每個案例用自己的暫存檔。
 let tmpDir = null
-let service = null
-let store = null
-let scheduler = null
 
 //假的 Discord client。只實作用得到的那幾個方法。
 const makeClient = () => {
@@ -50,15 +53,14 @@ const draft = (overrides = {}) => ({
 beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bc-svc-'))
     process.env.POLLS_FILE = path.join(tmpDir, 'polls.json')
-    vi.resetModules()
-    store = await import('@/core/pollStore')
-    scheduler = (await import('@/core/scheduler')).default
-    service = await import('@/core/pollService')
+    store.resetCache()
 })
 
 afterEach(async () => {
+    //排程是模組層級的 Map，沒清掉會殘留到下一個案例
     scheduler.cancelAll()
     delete process.env.POLLS_FILE
+    store.resetCache()
     await fs.rm(tmpDir, {recursive: true, force: true})
 })
 

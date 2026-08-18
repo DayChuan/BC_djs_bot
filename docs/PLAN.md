@@ -271,6 +271,21 @@ pm2 restart bc-test --update-env
 - [ ] 4-B-8 commit
 - [ ] 4-C `/quickpoll`
 
+### 測試環境限制（踩過的坑，加測試前先看）
+
+測試 jail 是 FreeBSD，vitest 在這裡有兩個必須繞開的地雷，兩個都已寫進 `vite.config.js`：
+
+| 症狀 | 原因 | 對策 |
+|---|---|---|
+| 多支測試檔停在 `0/N` 不動，先跑完的那支正常 | 同時開多個 worker。推測 jail 內取到的 CPU 數是宿主機的 | `fileParallelism: false` |
+| 有 import `discord.js` 的測試檔一跑就停住，CPU 全閒，`--testTimeout` 也攔不到 | 卡在 vite/esbuild 的轉換階段，測試根本還沒開始執行 | `server.deps.external: ['discord.js']` |
+
+還有一個寫法上的禁忌，設定檔擋不掉：
+
+- **不要在 `beforeEach` 裡用 `vi.resetModules()` + 動態 `import()`。** 只要那條 import 鏈上有 `discord.js`，每個案例都會把它整包重新載入，在這個環境會卡死到跑不完。要換設定就改成「換環境變數 + 清模組內的快取」，`pollStore.js` 的 `pollsFilePath()` 就是為此改成呼叫時才解析路徑。
+
+`tests/example.test.js` 是可直接照抄的範本，涵蓋斷言、前後置、假物件、假計時器與上述禁忌。
+
 **4-B 實機驗收**（測試伺服器）
 1. `/poll title:測試 options:紅,藍,綠 hours:1` → 出現投票訊息與一列選單；選一項後只有自己看得到確認訊息
 2. 加 `multi:true` → 選單可複選；取消全部勾選 → 回覆顯示「已取消你的投票」

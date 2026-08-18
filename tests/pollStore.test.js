@@ -1,23 +1,25 @@
-import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach} from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import * as store from '@/core/pollStore'
 
-//POLLS_FILE 必須在模組載入前就設好，所以這裡一律用動態 import，
-//並先 resetModules() 讓每個測試拿到全新的模組實體(否則 POLLS_FILE 會停在第一次載入時的值)。
-//靜態 import 會被提升到檔案最上面，來不及吃到 beforeEach 設的環境變數。
+//pollStore 的檔案路徑是「用到時才解析」的，所以這裡不需要重新載入模組，
+//只要在每個案例前換掉環境變數並清掉快取就好。
+//(早期版本用 vi.resetModules() + 動態 import，會把 discord.js 一起反覆重載，
+// 在測試 jail 裡會卡死。)
 let tmpDir = null
-let store = null
 
 beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bc-poll-'))
     process.env.POLLS_FILE = path.join(tmpDir, 'polls.json')
-    vi.resetModules()
-    store = await import('@/core/pollStore')
+    //快取是模組層級的，不清掉的話下一個案例會讀到上一個案例的資料
+    store.resetCache()
 })
 
 afterEach(async () => {
     delete process.env.POLLS_FILE
+    store.resetCache()
     await fs.rm(tmpDir, {recursive: true, force: true})
 })
 

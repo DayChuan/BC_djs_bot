@@ -6,10 +6,15 @@ import logger from '@/core/logger'
 //以檔案位置推導專案根目錄，不依賴當前工作目錄(同 logger.js，避免 M-05)
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
-//測試時用 POLLS_FILE 指到暫存檔，才不會動到真正的資料
-export const POLLS_FILE = process.env.POLLS_FILE
+const DEFAULT_POLLS_FILE = path.join(ROOT_DIR, 'data', 'polls.json')
+
+//路徑刻意在「用到時」才解析，不在模組載入時就定死。
+//載入時就讀環境變數的話，任何想換路徑的人(例如測試想指到暫存檔)
+//都得先設好環境變數再重新載入整個模組 —— 那會連帶把 discord.js 一起重載，
+//在測試 jail 裡會直接卡死。詳見 docs/PLAN.md 的環境限制。
+export const pollsFilePath = () => process.env.POLLS_FILE
     ? path.resolve(process.env.POLLS_FILE)
-    : path.join(ROOT_DIR, 'data', 'polls.json')
+    : DEFAULT_POLLS_FILE
 
 const emptyStore = () => ({polls: {}})
 
@@ -132,8 +137,10 @@ const enqueue = (task) => {
 const load = async () => {
     if(cache) return cache
 
+    const file = pollsFilePath()
+
     try{
-        const raw = await fs.readFile(POLLS_FILE, 'utf8')
+        const raw = await fs.readFile(file, 'utf8')
         const parsed = JSON.parse(raw)
         cache = (parsed && typeof parsed === 'object' && parsed.polls) ? parsed : emptyStore()
     }
@@ -144,9 +151,9 @@ const load = async () => {
         }
         else{
             //檔案壞掉時保留現場再從空的開始。直接覆蓋會讓當下所有投票資料無聲蒸發。
-            const backup = `${POLLS_FILE}.broken-${Date.now()}`
+            const backup = `${file}.broken-${Date.now()}`
             logger.error(`polls.json 讀取失敗，已備份到 ${backup}：`, e)
-            await fs.rename(POLLS_FILE, backup).catch(() => undefined)
+            await fs.rename(file, backup).catch(() => undefined)
             cache = emptyStore()
         }
     }
@@ -157,10 +164,11 @@ const load = async () => {
 //先寫暫存檔再 rename。rename 在同一個檔案系統上是原子操作，
 //行程剛好在寫入途中被殺掉時，polls.json 仍然是上一份完整的資料，不會變成半截 JSON。
 const persist = async () => {
-    await fs.mkdir(path.dirname(POLLS_FILE), {recursive: true})
-    const tmp = `${POLLS_FILE}.tmp`
+    const file = pollsFilePath()
+    await fs.mkdir(path.dirname(file), {recursive: true})
+    const tmp = `${file}.tmp`
     await fs.writeFile(tmp, JSON.stringify(cache, null, 2), 'utf8')
-    await fs.rename(tmp, POLLS_FILE)
+    await fs.rename(tmp, file)
 }
 
 //對外一律回複本，避免呼叫端拿到快取本身後在佇列外偷改
@@ -238,7 +246,7 @@ export const resetCache = () => {
 }
 
 export default {
-    POLLS_FILE,
+    pollsFilePath,
     readPolls,
     getPoll,
     listOpenPolls,
