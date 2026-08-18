@@ -107,17 +107,14 @@ export const publishPending = async (client, pollId) => {
 const scheduleNextRound = async (client, poll) => {
     const openAt = nextWeeklyDate(poll.weekly.openDay, poll.weekly.openTime).toISOString()
 
+    //整份複製，只覆寫「這一輪專屬」的欄位。
+    //早期版本用白名單逐一列舉要帶過去的設定，結果 multiChar 與 peek 都漏了 ——
+    //開了一人多角色的每週投票，下一週會變回單角色，而且不公開中途結果的設定
+    //也會被還原成公開。白名單只要新增欄位就會漏，所以改成反過來做。
+    const {id, messageId, closeAt, archivedAt, archivedBy, result, ...carried} = poll
+
     const next = await createPoll({
-        type: poll.type,
-        guildId: poll.guildId,
-        channelId: poll.channelId,
-        title: poll.title,
-        description: poll.description,
-        options: poll.options,
-        multi: poll.multi,
-        identityGroup: poll.identityGroup,
-        weekly: poll.weekly,
-        createdBy: poll.createdBy,
+        ...carried,
         status: 'pending',
         messageId: null,
         openAt,
@@ -473,6 +470,15 @@ export const handleAdminAction = async (interaction, {action, pollId}) => {
         const cancelled = await cancelPoll(client, pollId, by)
         if(!cancelled) return detailOf(pollId, '這場投票的狀態已經改變，沒有執行取消。')
         return backToList(`已取消「${item.poll.title}」，紀錄保留在歷史中。`)
+    }
+
+    //一人多角色是建立時的參數，但 Modal 只放得下五個輸入框，已經滿了。
+    //做成開關按鈕：已經在跑的投票也能改，不必取消重開。
+    //已投的票不受影響 —— 舊資料本來就是一人一筆，開啟後只是可以再加第二筆。
+    if(action === 'mchar'){
+        if(item.kind === 'archived') return detailOf(pollId, '已結束的投票不能修改。')
+        await applyPollEdit(client, pollId, {multiChar: !item.poll.multiChar})
+        return detailOf(pollId, item.poll.multiChar ? '已關閉一人多角色。' : '已開啟一人多角色。')
     }
 
     if(action === 'share'){
