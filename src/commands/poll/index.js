@@ -134,8 +134,7 @@ export const action = async(ctx) => {
     if(multiChar && !ctx.options.getString('identity')){
         await reject(
             ctx,
-            '要開啟「一人多角色」必須同時選擇 `identity`（身分群組）。
-' +
+            '要開啟「一人多角色」必須同時選擇 `identity`（身分群組）。\n' +
             '沒有身分可以區分的話，同一個人的多筆登記在結算名單上分不出誰是誰。'
         )
         return

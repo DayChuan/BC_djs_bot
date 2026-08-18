@@ -547,7 +547,20 @@ pm2 restart bc-test --update-env
 （左右切換鍵的 customId 重複，測試把它當規格釘住，等於幫兇）。
 介面的正確性改用測試伺服器實機驗收。
 
-已刪除：`tests/pollRender.test.js`、`tests/pollPanel.test.js`、`tests/pollAdmin.test.js`。
+**硬性限制：測試檔不得直接或間接 import `discord.js`。**
+測試 jail 裡只要碰到它就會卡住跑不完 —— 這條規則是靠實驗歸納的：
+卡住的檔案全部有碰（`pollRender`、`pollPanel`、`pollAdmin`、`pollService`），
+跑得完的全部沒碰（`pollStore`、`pollArchive`、`scheduler`、`pollIdentities`）。
+`server.deps.external` 只是把卡住的點往後推，沒有真正解決。
+已經花掉太多時間在這個環境問題上而報酬是零，所以不再嘗試修它，改為繞開。
+
+已刪除：`tests/pollRender.test.js`、`tests/pollPanel.test.js`、
+`tests/pollAdmin.test.js`、`tests/pollService.test.js`。
+
+**`tests/moduleLayout.test.js` 是純靜態檢查**：只讀原始碼文字、不 import 任何模組，
+所以不受上面的限制。它守住兩件事 ——
+`export default` 必須在所有宣告之後（TDZ 事故已發生兩次），
+以及測試檔不得碰 discord.js（規則自己守自己）。
 
 **唯一的例外**：每個模組保留一個「default export 的成員在載入時都取得到」的檢查。
 2026-08-18 發生過 `export default` 擺在函式宣告之前導致 TDZ ReferenceError，
