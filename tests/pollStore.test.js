@@ -12,13 +12,13 @@ let tmpDir = null
 
 beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bc-poll-'))
-    process.env.POLLS_FILE = path.join(tmpDir, 'polls.json')
+    process.env.POLL_DATA_DIR = tmpDir
     //快取是模組層級的，不清掉的話下一個案例會讀到上一個案例的資料
     store.resetCache()
 })
 
 afterEach(async () => {
-    delete process.env.POLLS_FILE
+    delete process.env.POLL_DATA_DIR
     store.resetCache()
     await fs.rm(tmpDir, {recursive: true, force: true})
 })
@@ -42,26 +42,26 @@ describe('applyVote', () => {
         const poll = samplePoll()
         store.applyVote(poll, 'u1', {options: ['o0', 'o1']})
         store.applyVote(poll, 'u1', {options: ['o2']})
-        expect(poll.votes.u1.options).toEqual(['o2'])
+        expect(poll.votes.u1[0].options).toEqual(['o2'])
     })
 
     it('單選投票即使前端送多個也只留第一個', () => {
         const poll = samplePoll({multi: false})
         store.applyVote(poll, 'u1', {options: ['o0', 'o1']})
-        expect(poll.votes.u1.options).toEqual(['o0'])
+        expect(poll.votes.u1[0].options).toEqual(['o0'])
     })
 
     it('不存在的選項會被丟掉(不信任前端送來的 key)', () => {
         const poll = samplePoll()
         store.applyVote(poll, 'u1', {options: ['o0', 'not-exist']})
-        expect(poll.votes.u1.options).toEqual(['o0'])
+        expect(poll.votes.u1[0].options).toEqual(['o0'])
     })
 
     it('只送身分時不會動到已選的選項', () => {
         const poll = samplePoll()
         store.applyVote(poll, 'u1', {options: ['o0']})
         store.applyVote(poll, 'u1', {identity: 'paladin'})
-        expect(poll.votes.u1).toEqual({options: ['o0'], identity: 'paladin'})
+        expect(poll.votes.u1).toEqual([{entryId: 'e0', options: ['o0'], identity: 'paladin'}])
     })
 
     it('選項清空且沒有身分 = 取消投票，整筆移除', () => {
@@ -80,6 +80,7 @@ describe('tally', () => {
 
         const result = store.tally(poll)
         expect(result.voterCount).toBe(2)
+        expect(result.entryCount).toBe(2)
         expect(result.options[0]).toMatchObject({key: 'o0', count: 2, percent: 100})
         expect(result.options[1]).toMatchObject({key: 'o1', count: 1, percent: 50})
         expect(result.options[2]).toMatchObject({key: 'o2', count: 0, percent: 0})
@@ -120,7 +121,7 @@ describe('檔案持久化', () => {
 
         store.resetCache()
         const reloaded = await store.getPoll(created.id)
-        expect(reloaded.votes.u1).toEqual({options: ['o0'], identity: 'paladin'})
+        expect(reloaded.votes.u1).toEqual([{entryId: 'e0', options: ['o0'], identity: 'paladin'}])
     })
 
     it('已結算的投票不再收票', async () => {
@@ -168,7 +169,7 @@ describe('檔案持久化', () => {
         expect(Object.keys(reloaded.votes)).toHaveLength(50)
     })
 
-    it('回傳的是複本，外面改它不會污染快取', async () => {
+    it('回傳的是獨立物件，外面改它不會影響檔案內容', async () => {
         const created = await store.createPoll(samplePoll())
         const first = await store.getPoll(created.id)
         first.title = '被改掉了'
@@ -177,14 +178,50 @@ describe('檔案持久化', () => {
         expect(second.title).toBe('本週副本時段')
     })
 
-    it('檔案壞掉時備份原檔並從空的開始，不會直接覆蓋', async () => {
-        await fs.writeFile(process.env.POLLS_FILE, '{ 這不是 JSON', 'utf8')
+    it('某一場的檔案壞掉時備份它，其他投票照常讀得到', async () => {
+        const good = await store.createPoll(samplePoll({title: '正常的'}))
+        const broken = await store.createPoll(samplePoll({title: '壞掉的'}))
+        await fs.writeFile(path.join(store.pollsDir(), `${broken.id}.json`), '{ 這不是 JSON', 'utf8')
 
         const polls = await store.readPolls()
-        expect(polls).toEqual({})
+        //這就是一場一檔的好處：壞掉一場不會拖垮全部
+        expect(Object.keys(polls)).toEqual([good.id])
 
-        const files = await fs.readdir(tmpDir)
+        const files = await fs.readdir(store.pollsDir())
         expect(files.some((name) => name.includes('.broken-'))).toBe(true)
+    })
+
+    it('id 格式不合法時一律拒絕，避免被拿去組出任意路徑', async () => {
+        expect(store.isValidPollId('p_abc123')).toBe(true)
+        expect(store.isValidPollId('../../etc/passwd')).toBe(false)
+        expect(store.isValidPollId('')).toBe(false)
+
+        expect(await store.getPoll('../../etc/passwd')).toBeNull()
+        expect(await store.deletePoll('../../etc/passwd')).toBe(false)
+    })
+})
+
+describe('migrateLegacyStore', () => {
+    it('把舊的單一 polls.json 拆成一場一檔，並保留原檔', async () => {
+        const legacy = {
+            polls: {
+                p_old001: {id: 'p_old001', title: '舊投票 A', status: 'open', options: [], votes: {}},
+                p_old002: {id: 'p_old002', title: '舊投票 B', status: 'pending', options: [], votes: {}},
+            },
+        }
+        await fs.writeFile(path.join(tmpDir, 'polls.json'), JSON.stringify(legacy), 'utf8')
+
+        expect(await store.migrateLegacyStore()).toBe(2)
+        expect((await store.getPoll('p_old001')).title).toBe('舊投票 A')
+
+        //原檔不刪只改名，拆錯了還救得回來
+        const files = await fs.readdir(tmpDir)
+        expect(files).toContain('polls.json.migrated')
+        expect(files).not.toContain('polls.json')
+    })
+
+    it('沒有舊檔時回 0，不會拋錯', async () => {
+        expect(await store.migrateLegacyStore()).toBe(0)
     })
 })
 
@@ -252,5 +289,77 @@ describe('makePollId', () => {
 
     it('同一毫秒內產生的 id 不會相同', () => {
         expect(store.makePollId(1755400000000, 0.1)).not.toBe(store.makePollId(1755400000000, 0.9))
+    })
+})
+
+describe('一人多角色', () => {
+    const poll = () => samplePoll({multiChar: true})
+
+    it('normalizeEntries 把舊的一人一筆轉成陣列', () => {
+        expect(store.normalizeEntries({options: ['o0'], identity: 'paladin'}))
+            .toEqual([{entryId: 'e0', options: ['o0'], identity: 'paladin'}])
+        expect(store.normalizeEntries(undefined)).toEqual([])
+    })
+
+    it('addEntry 依序給編號，不重用刪掉的編號', () => {
+        const p = poll()
+        expect(store.addEntry(p, 'u1')).toBe('e0')
+        expect(store.addEntry(p, 'u1')).toBe('e1')
+
+        store.removeEntry(p, 'u1', 'e0')
+        //重用 e0 的話，還開著舊面板的人會改到不同的角色
+        expect(store.addEntry(p, 'u1')).toBe('e2')
+    })
+
+    it('超過上限就不再新增', () => {
+        const p = poll()
+        for(let i = 0; i < store.MAX_ENTRIES_PER_USER; i += 1) store.addEntry(p, 'u1')
+        expect(store.addEntry(p, 'u1')).toBeNull()
+    })
+
+    it('各角色的選擇互不影響', () => {
+        const p = poll()
+        store.applyVote(p, 'u1', {options: ['o0'], identity: 'paladin'}, 'e0')
+        store.applyVote(p, 'u1', {options: ['o1'], identity: 'arch-mage'}, 'e1')
+
+        expect(p.votes.u1).toEqual([
+            {entryId: 'e0', options: ['o0'], identity: 'paladin'},
+            {entryId: 'e1', options: ['o1'], identity: 'arch-mage'},
+        ])
+    })
+
+    it('刪掉最後一個角色時整個人從名單移除', () => {
+        const p = poll()
+        store.applyVote(p, 'u1', {options: ['o0']}, 'e0')
+        expect(store.removeEntry(p, 'u1', 'e0')).toBe(true)
+        expect(p.votes.u1).toBeUndefined()
+    })
+
+    it('刪除不存在的角色回 false', () => {
+        const p = poll()
+        expect(store.removeEntry(p, 'u1', 'e9')).toBe(false)
+    })
+
+    it('tally 以角色為票數單位，另外給人數', () => {
+        const p = poll()
+        store.applyVote(p, 'u1', {options: ['o0'], identity: 'paladin'}, 'e0')
+        store.applyVote(p, 'u1', {options: ['o0'], identity: 'arch-mage'}, 'e1')
+        store.applyVote(p, 'u2', {options: ['o1'], identity: 'paladin'}, 'e0')
+
+        const result = store.tally(p)
+        expect(result.voterCount).toBe(2)      //兩個人
+        expect(result.entryCount).toBe(3)      //三隻角色
+        expect(result.options[0]).toMatchObject({key: 'o0', count: 2, userCount: 1})
+        expect(result.identityTotals).toEqual({paladin: 2, 'arch-mage': 1})
+    })
+
+    it('百分比以角色數為分母', () => {
+        const p = poll()
+        store.applyVote(p, 'u1', {options: ['o0']}, 'e0')
+        store.applyVote(p, 'u1', {options: ['o1']}, 'e1')
+
+        const result = store.tally(p)
+        expect(result.options[0].percent).toBe(50)
+        expect(result.options[1].percent).toBe(50)
     })
 })

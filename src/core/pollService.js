@@ -1,16 +1,20 @@
 import logger from '@/core/logger'
 import scheduler, {nextWeeklyDate} from '@/core/scheduler'
 import {
+    addVoteEntry,
     castVote,
     createPoll,
     deletePoll,
+    getEntries,
     getPoll,
     listActivePolls,
     listOpenPolls,
+    removeVoteEntry,
     updatePoll,
 } from '@/core/pollStore'
+import {archivePoll} from '@/core/pollArchive'
 import {
-    buildBallotReply,
+    buildMemberPanel,
     buildClosedMessage,
     buildPollMessage,
     buildResultMessage,
@@ -31,7 +35,7 @@ const fetchChannel = async (client, channelId) => {
 /////////////////////////////// 發布 ///////////////////////////////
 
 //把一場投票送進頻道，並排好截止時間。
-//poll 必須已經存在於 polls.json —— 先落盤再送訊息，
+//poll 必須已經寫進 polls/ —— 先落盤再送訊息，
 //反過來的話送出訊息後當機，頻道裡就會留下一則永遠不會結算的殭屍投票。
 const sendPollMessage = async (client, poll) => {
     const channel = await fetchChannel(client, poll.channelId)
@@ -153,14 +157,16 @@ export const closePoll = async (client, pollId) => {
     if(channel) await channel.send(buildResultMessage(poll))
     else logger.error(`投票 ${pollId} 找不到頻道 ${poll.channelId}，結果無法公布`)
 
-    //有每週設定就先排好下一輪，再刪這一筆。
+    //有每週設定就先排好下一輪，再處理這一筆。
     //順序反過來的話，中間當機就會兩邊都沒有。
     if(poll.weekly) await scheduleNextRound(client, poll)
 
-    await deletePoll(pollId)
+    //從 polls/ 搬到 archive/，並補上結果快照。
+    //「結算後清空」的語意是「移出進行中」，不是銷毀 —— 之後可用 /poll_history 查。
+    await archivePoll(poll)
     scheduler.cancel(closeKey(pollId))
 
-    logger.info(`投票已結算並清除：${pollId}「${poll.title}」投票人數=${Object.keys(poll.votes || {}).length}`)
+    logger.info(`投票已結算：${pollId}「${poll.title}」投票人數=${Object.keys(poll.votes || {}).length}`)
     return poll
 }
 
@@ -191,25 +197,53 @@ export const restorePolls = async (client) => {
     return polls.length
 }
 
-/////////////////////////// 選單互動 ///////////////////////////
+/////////////////////////// 面板互動 ///////////////////////////
 
-//選單送回來的一定是「這個人當下的完整選擇」，所以直接覆蓋。
-//kind 為 identity 時只帶身分，不動選項。
-export const handlePollSelect = async (interaction, kind, pollId) => {
-    const ballot = kind === 'identity'
-        ? {identity: interaction.values[0] || null}
-        : {options: interaction.values}
+//面板上的所有操作都走這裡，回傳「可以直接丟給 editReply() 的內容」。
+//查不到或已截止時回一段文字，呼叫端不必自己判斷型別。
+//
+//entryId 是要操作哪一個角色。改版前發出的舊投票訊息不帶這個值，
+//此時一律當作第一筆處理，舊訊息才不會突然點不動。
+export const handlePollAction = async (interaction, {kind, pollId, entryId}) => {
+    const userId = interaction.user.id
+    let active = entryId
+    let poll = null
 
-    const poll = await castVote(pollId, interaction.user.id, ballot)
-
-    if(!poll){
-        return '這場投票已經結束並清除了。'
+    if(kind === 'opt' || kind === 'idt'){
+        //選單送回來的一定是「這個角色當下的完整選擇」，所以直接覆蓋
+        const ballot = kind === 'idt'
+            ? {identity: interaction.values[0] || null}
+            : {options: interaction.values}
+        poll = await castVote(pollId, userId, ballot, entryId)
     }
-    if(poll.status !== 'open'){
-        return '這場投票已經截止，不能再更改。'
+    else if(kind === 'add'){
+        poll = await addVoteEntry(pollId, userId)
+        if(poll){
+            //新增的一定是最後一筆，直接把面板切過去
+            const entries = getEntries(poll, userId)
+            const last = entries[entries.length - 1]
+            if(last) active = last.entryId
+        }
+    }
+    else if(kind === 'del'){
+        poll = await removeVoteEntry(pollId, userId, entryId)
+        //刪掉的就是當前這筆，讓面板自己退回第一筆
+        active = null
+    }
+    else if(kind === 'sel'){
+        //純粹切換畫面，不動資料
+        poll = await getPoll(pollId)
+        active = interaction.values[0] || null
+    }
+    else{
+        //'open'：只是把面板叫出來
+        poll = await getPoll(pollId)
     }
 
-    return buildBallotReply(poll, interaction.user.id)
+    if(!poll) return {content: '這場投票已經結束並清除了。'}
+    if(poll.status !== 'open') return {content: '這場投票已經截止，不能再更改。'}
+
+    return buildMemberPanel(poll, userId, active)
 }
 
 /////////////////////////// 中途查看結果 ///////////////////////////
@@ -256,7 +290,7 @@ export default {
     publishPending,
     closePoll,
     restorePolls,
-    handlePollSelect,
+    handlePollAction,
     peekPoll,
     findOpenPollsInChannel,
     resolveCommandPoll,

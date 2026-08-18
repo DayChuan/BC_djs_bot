@@ -44,6 +44,9 @@ export const command = new SlashCommandBuilder()
         .setDescription('是否附身分選單，選了投票者要一併選擇自己的身分')
         .addChoices(...identityChoices()))
     .addBooleanOption((option) => option
+        .setName('multi_char')
+        .setDescription('是否允許一人登記多個角色（例如同時報名黑騎士與主教）'))
+    .addBooleanOption((option) => option
         .setName('peek')
         .setDescription('是否開放所有人中途查看結果（預設是；設否則只有管理員能用 /poll_peek）'))
     .addIntegerOption((option) => option
@@ -141,6 +144,7 @@ export const action = async(ctx) => {
         options,
         multi: ctx.options.getBoolean('multi') || false,
         identityGroup: ctx.options.getString('identity') || null,
+        multiChar: ctx.options.getBoolean('multi_char') || false,
         peek,
         weekly: weeklyConfig,
         createdBy: ctx.user.id,
@@ -163,6 +167,9 @@ export const action = async(ctx) => {
             `每週重複：${WEEKDAYS[weeklyConfig.openDay].name} ${weeklyConfig.openTime} 發起、` +
             `${WEEKDAYS[weeklyConfig.closeDay].name} ${weeklyConfig.closeTime} 結算（台北時間）。`
         )
+    }
+    if(ctx.options.getBoolean('multi_char')){
+        lines.push('已開啟一人多角色：投票者可以在面板上按「新增角色」登記第二隻以後的角色。')
     }
     lines.push(peek
         ? '所有人都可以按投票訊息上的按鈕查看目前結果（只有自己看得到）。'

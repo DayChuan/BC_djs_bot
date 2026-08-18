@@ -6,14 +6,31 @@ import {
     StringSelectMenuBuilder,
 } from 'discord.js'
 import {getIdentityGroup, identityLabel} from '@/config/pollIdentities'
-import {tally} from '@/core/pollStore'
+import {getEntries, MAX_ENTRIES_PER_USER, tally} from '@/core/pollStore'
 
-//customId 帶著投票 id，bot 重啟後頻道裡那則舊訊息照樣點得動 ——
+//customId 的格式是 poll:<動作>:<投票id>[:<角色id>]。
+//id 帶在裡面，bot 重啟後頻道裡那則舊訊息照樣點得動 ——
 //不需要在記憶體裡保留任何「這則訊息是哪場投票」的對照。
-//Discord 的 customId 上限是 100 字元，前綴 9 字 + id 13 字，離上限還很遠。
-export const POLL_OPTION_PREFIX = 'poll:opt:'
-export const POLL_IDENTITY_PREFIX = 'poll:idt:'
-export const POLL_PEEK_PREFIX = 'poll:peek:'
+//Discord 的 customId 上限 100 字元，這裡最長約 30 字，離上限很遠。
+export const POLL_PREFIX = 'poll:'
+
+export const POLL_KINDS = new Set([
+    'open',     //公開訊息上的「投票 / 修改」按鈕
+    'peek',     //公開訊息上的「查看目前結果」按鈕
+    'opt',      //個人面板的選項選單
+    'idt',      //個人面板的身分選單
+    'add',      //個人面板的「新增角色」
+    'del',      //個人面板的「刪除這個角色」
+    'sel',      //個人面板的角色切換選單
+])
+
+export const customId = (kind, pollId, entryId) =>
+    `${POLL_PREFIX}${kind}:${pollId}${entryId ? `:${entryId}` : ''}`
+
+//舊版的常數留著，改版前發出的投票訊息仍然指向這些前綴
+export const POLL_OPTION_PREFIX = `${POLL_PREFIX}opt:`
+export const POLL_IDENTITY_PREFIX = `${POLL_PREFIX}idt:`
+export const POLL_PEEK_PREFIX = `${POLL_PREFIX}peek:`
 
 const COLOR_OPEN = 0x5865F2
 const COLOR_CLOSED = 0x57F287
@@ -23,19 +40,18 @@ const MAX_FIELD_NAME = 256
 const MAX_FIELD_VALUE = 1024
 const MAX_FIELDS = 25
 
-//解析選單送回來的 customId。不是投票的就回 null，讓分派器交給別的處理器。
-export const parsePollCustomId = (customId) => {
-    const text = String(customId || '')
-    if(text.startsWith(POLL_OPTION_PREFIX)){
-        return {kind: 'option', pollId: text.slice(POLL_OPTION_PREFIX.length)}
-    }
-    if(text.startsWith(POLL_IDENTITY_PREFIX)){
-        return {kind: 'identity', pollId: text.slice(POLL_IDENTITY_PREFIX.length)}
-    }
-    if(text.startsWith(POLL_PEEK_PREFIX)){
-        return {kind: 'peek', pollId: text.slice(POLL_PEEK_PREFIX.length)}
-    }
-    return null
+//解析元件送回來的 customId。不是投票的就回 null，讓分派器交給別的處理器。
+//entryId 可以是 null —— 改版前發出的投票訊息不帶角色編號，
+//那種情況一律視為操作第一筆，舊訊息才不會突然點不動。
+export const parsePollCustomId = (raw) => {
+    const text = String(raw || '')
+    if(!text.startsWith(POLL_PREFIX)) return null
+
+    const [, kind, pollId, entryId] = text.split(':')
+    if(!kind || !pollId) return null
+    if(!POLL_KINDS.has(kind)) return null
+
+    return {kind, pollId, entryId: entryId || null}
 }
 
 //建立投票時沒指定 peek 就是允許中途查看。
@@ -60,18 +76,24 @@ export const percentBar = (percent, width = 10) => {
 
 /////////////////////////// 進行中的投票訊息 ///////////////////////////
 
+//頻道裡常駐的那則訊息。對所有人都一樣，所以不能顯示任何個人狀態 ——
+//選單搬進個人面板的另一個理由：一則訊息最多五列元件，
+//多角色投票光是選單就會爆掉。
 export const buildPollMessage = (poll) => {
     const lines = []
     if(poll.description) lines.push(poll.description)
     lines.push(poll.multi ? '**可以複選。**' : '**只能選一項。**')
-    if(poll.identityGroup){
-        const group = getIdentityGroup(poll.identityGroup)
-        if(group) lines.push(`投票後請一併從第二個選單選擇你的${group.label}身分。`)
+
+    const group = getIdentityGroup(poll.identityGroup)
+    if(group) lines.push(`投票時要一併選擇你的${group.label}身分。`)
+    if(poll.multiChar){
+        lines.push(`**一個人可以登記多個角色**（上限 ${MAX_ENTRIES_PER_USER} 個），在面板上按「新增角色」。`)
     }
+
     lines.push(`截止時間：${timestamp(poll.closeAt)}（${timestamp(poll.closeAt, 'R')}）`)
     lines.push(canPeek(poll)
-        ? '選好後可以隨時改，以截止前最後一次為準。想看目前狀況就按下方按鈕（只有你看得到）。'
-        : '選好後可以隨時改，以截止前最後一次為準。這場投票的中途結果不公開。')
+        ? '按下方按鈕投票，內容只有你自己看得到，截止前可以隨時改。'
+        : '按下方按鈕投票，內容只有你自己看得到，截止前可以隨時改。這場投票的中途結果不公開。')
 
     const embed = new EmbedBuilder()
         .setColor(COLOR_OPEN)
@@ -79,8 +101,70 @@ export const buildPollMessage = (poll) => {
         .setDescription(lines.join('\n\n'))
         .setFooter({text: '結果會在截止後公布在這個頻道'})
 
+    const buttons = [
+        new ButtonBuilder()
+            .setCustomId(customId('open', poll.id))
+            .setLabel(poll.multiChar ? '投票 / 管理我的角色' : '投票 / 修改')
+            .setStyle(ButtonStyle.Primary),
+    ]
+
+    //允許中途查看時才掛按鈕。不允許的話按鈕根本不存在，
+    //比「掛上去但點了說沒權限」乾淨 —— 管理員仍可用 /poll_peek 查看。
+    if(canPeek(poll)){
+        buttons.push(new ButtonBuilder()
+            .setCustomId(customId('peek', poll.id))
+            .setLabel('查看目前結果')
+            .setStyle(ButtonStyle.Secondary))
+    }
+
+    return {embeds: [embed], components: [new ActionRowBuilder().addComponents(...buttons)]}
+}
+
+/////////////////////////// 個人投票面板 ///////////////////////////
+
+const entryTitle = (poll, entry, index) => {
+    const identity = entry.identity ? identityLabel(poll.identityGroup, entry.identity) : '未選身分'
+    return poll.identityGroup ? `角色 ${index + 1}：${identity}` : `第 ${index + 1} 筆`
+}
+
+//按下「投票 / 修改」後只有本人看得到的面板。
+//因為是 ephemeral，選單可以帶 default 勾選 —— 使用者看得到自己目前的狀態。
+//activeEntryId 是「目前正在編輯哪一個角色」，一次只編輯一個，
+//這樣元件數量就跟角色數脫鉤，登記幾個角色都不會超過五列的限制。
+export const buildMemberPanel = (poll, userId, activeEntryId = null) => {
+    const entries = getEntries(poll, userId)
+    const list = entries.length > 0 ? entries : [{entryId: 'e0', options: [], identity: null}]
+
+    const activeIndex = Math.max(0, list.findIndex((entry) => entry.entryId === activeEntryId))
+    const active = list[activeIndex]
+
+    const labelOf = (key) => {
+        const option = poll.options.find((item) => item.key === key)
+        return option ? option.label : key
+    }
+
+    const embed = new EmbedBuilder()
+        .setColor(COLOR_OPEN)
+        .setTitle(`🗳️ ${clamp(poll.title, MAX_FIELD_NAME)}`)
+
+    //把目前所有角色的登記狀況列出來，正在編輯的那個標上箭頭
+    const summary = list.map((entry, index) => {
+        const mark = entry.entryId === active.entryId ? '▶' : '　'
+        const picked = entry.options.length > 0
+            ? entry.options.map(labelOf).join('、')
+            : '尚未選擇'
+        return `${mark} **${entryTitle(poll, entry, index)}**　${picked}`
+    })
+
+    embed.setDescription([
+        poll.multiChar
+            ? `你可以登記多個角色，一次編輯一個。目前有 ${list.length} 個。`
+            : '選好後直接關掉就行，截止前可以隨時回來改。',
+        summary.join('\n'),
+    ].join('\n\n'))
+
     const optionSelect = new StringSelectMenuBuilder()
-        .setCustomId(`${POLL_OPTION_PREFIX}${poll.id}`)
+        .setCustomId(customId('opt', poll.id, active.entryId))
         .setPlaceholder(poll.multi ? '選擇你要的選項(可複選)' : '選擇一個選項')
         //最小 0 是為了讓人能取消投票。設 1 的話選了就再也拿不掉。
         .setMinValues(0)
@@ -88,6 +172,7 @@ export const buildPollMessage = (poll) => {
         .addOptions(poll.options.map((option) => ({
             label: clamp(option.label, 100),
             value: option.key,
+            default: active.options.includes(option.key),
         })))
 
     const components = [new ActionRowBuilder().addComponents(optionSelect)]
@@ -95,74 +180,67 @@ export const buildPollMessage = (poll) => {
     const group = getIdentityGroup(poll.identityGroup)
     if(group && group.options.length > 0){
         const identitySelect = new StringSelectMenuBuilder()
-            .setCustomId(`${POLL_IDENTITY_PREFIX}${poll.id}`)
+            .setCustomId(customId('idt', poll.id, active.entryId))
             .setPlaceholder(group.placeholder || `選擇你的${group.label}身分`)
             .setMinValues(0)
             .setMaxValues(1)
             .addOptions(group.options.map((option) => ({
                 label: clamp(option.label, 100),
                 value: option.value,
+                default: active.identity === option.value,
             })))
         components.push(new ActionRowBuilder().addComponents(identitySelect))
     }
 
-    //允許中途查看時才掛按鈕。不允許的話按鈕根本不存在，
-    //比「掛上去但點了說沒權限」乾淨 —— 管理員仍可用 /poll_peek 查看。
-    if(canPeek(poll)){
-        components.push(new ActionRowBuilder().addComponents(
+    //兩個以上角色時才需要切換選單
+    if(list.length > 1){
+        const switcher = new StringSelectMenuBuilder()
+            .setCustomId(customId('sel', poll.id))
+            .setPlaceholder('切換要編輯的角色')
+            .addOptions(list.map((entry, index) => ({
+                label: clamp(entryTitle(poll, entry, index), 100),
+                value: entry.entryId,
+                default: entry.entryId === active.entryId,
+            })))
+        components.push(new ActionRowBuilder().addComponents(switcher))
+    }
+
+    if(poll.multiChar){
+        const buttons = [
             new ButtonBuilder()
-                .setCustomId(`${POLL_PEEK_PREFIX}${poll.id}`)
-                .setLabel('查看目前結果')
-                .setStyle(ButtonStyle.Secondary)
-        ))
+                .setCustomId(customId('add', poll.id))
+                .setLabel('新增角色')
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(list.length >= MAX_ENTRIES_PER_USER),
+        ]
+        if(list.length > 1){
+            buttons.push(new ButtonBuilder()
+                .setCustomId(customId('del', poll.id, active.entryId))
+                .setLabel('刪除這個角色')
+                .setStyle(ButtonStyle.Danger))
+        }
+        components.push(new ActionRowBuilder().addComponents(...buttons))
     }
 
     return {embeds: [embed], components}
 }
-
-//投完之後只給本人看的確認訊息。
-//順便把目前的統計附上去 —— 公開訊息不即時顯示票數(會有從眾效應，
-//而且每票都要編輯訊息，很容易撞到速率限制)，但個人回覆裡給就沒有這些問題。
-export const buildBallotReply = (poll, userId) => {
-    const vote = (poll.votes || {})[userId]
-    const labelOf = (key) => {
-        const option = poll.options.find((item) => item.key === key)
-        return option ? option.label : key
-    }
-
-    const lines = []
-    if(!vote || vote.options.length === 0) lines.push('已取消你的投票（沒有選擇任何選項）。')
-    else lines.push(`已登記：**${vote.options.map(labelOf).join('、')}**`)
-
-    if(poll.identityGroup){
-        lines.push(vote && vote.identity
-            ? `身分：**${identityLabel(poll.identityGroup, vote.identity)}**`
-            : '身分：尚未選擇')
-    }
-
-    const result = tally(poll)
-    lines.push('')
-    lines.push(`目前 ${result.voterCount} 人投票：`)
-    lines.push(result.options.map((option) => `　${option.label}　${option.count} 票`).join('\n'))
-
-    return lines.join('\n')
-}
-
 ///////////////////////////// 結算報表 /////////////////////////////
 
 //把某個選項的投票者列成一行行文字。有身分的按身分分組，沒有的就直接列。
+//一人多角色時，同一個人會在不同身分底下各出現一次 —— 這是刻意的，
+//揪團要看的是「哪幾隻角色會到」，不是「哪幾個人會到」。
 const formatVoters = (poll, option) => {
-    const votes = poll.votes || {}
-
     if(!poll.identityGroup){
-        return option.userIds.map((id) => `<@${id}>`).join(' ') || '—'
+        //沒有身分可以區分，同一人重複列只會讓人以為壞了，所以去重
+        const unique = [...new Set(option.entries.map((entry) => entry.userId))]
+        return unique.map((id) => `<@${id}>`).join(' ') || '—'
     }
 
     const groups = new Map()
-    for(const userId of option.userIds){
-        const key = votes[userId].identity || null
+    for(const entry of option.entries){
+        const key = entry.identity || null
         if(!groups.has(key)) groups.set(key, [])
-        groups.get(key).push(userId)
+        groups.get(key).push(entry.userId)
     }
 
     return [...groups.entries()]
@@ -179,13 +257,18 @@ const formatVoters = (poll, option) => {
 export const buildResultMessage = (poll, {live = false} = {}) => {
     const result = tally(poll)
 
+    //一人多角色的投票要同時給「幾個人」與「幾隻角色」，只給其中一個都會誤導
+    const counts = poll.multiChar
+        ? `${result.voterCount} 人 / ${result.entryCount} 個角色`
+        : `${result.voterCount} 人`
+
     const embed = new EmbedBuilder()
         .setColor(live ? COLOR_OPEN : COLOR_CLOSED)
         .setTitle(`📊 ${live ? '目前結果' : '投票結果'}：${clamp(poll.title, 200)}`)
         .setFooter({
             text: live
-                ? `目前 ${result.voterCount} 人投票 · 尚未截止，數字還會變動`
-                : `共 ${result.voterCount} 人投票`,
+                ? `目前 ${counts}投票 · 尚未截止，數字還會變動`
+                : `共 ${counts}投票`,
         })
 
     //結算版標上截止時間；即時版標「現在」，避免看起來像是舊資料
@@ -221,7 +304,7 @@ export const buildResultMessage = (poll, {live = false} = {}) => {
     if(poll.identityGroup && Object.keys(result.identityTotals).length > 0){
         const summary = Object.entries(result.identityTotals)
             .sort((a, b) => b[1] - a[1])
-            .map(([value, count]) => `${identityLabel(poll.identityGroup, value)}　${count} 人`)
+            .map(([value, count]) => `${identityLabel(poll.identityGroup, value)}　${count} ${poll.multiChar ? "隻" : "人"}`)
             .join('\n')
         embed.addFields({name: '身分統計', value: clamp(summary, MAX_FIELD_VALUE)})
     }
@@ -237,4 +320,44 @@ export const buildClosedMessage = (poll) => {
         .setDescription(`這場投票已於 ${timestamp(poll.closeAt)} 結束，結果公布在下方訊息。`)
 
     return {embeds: [embed], components: []}
+}
+
+/////////////////////////////// 歷史查詢 ///////////////////////////////
+
+//歷史清單。只給概要，細節要另外用 id 查 —— 一次塞太多會超過 embed 上限。
+export const buildHistoryList = (records, {keyword = ''} = {}) => {
+    const embed = new EmbedBuilder()
+        .setColor(COLOR_CLOSED)
+        .setTitle('📚 過往投票紀錄')
+
+    if(records.length === 0){
+        embed.setDescription(keyword
+            ? `找不到標題含「${keyword}」的歷史投票。`
+            : '目前沒有任何歷史投票。')
+        return {embeds: [embed]}
+    }
+
+    embed.setDescription([
+        keyword ? `標題含「${keyword}」的結果，由新到舊：` : '由新到舊：',
+        '用 `/poll_history id:<id>` 看單場完整結果。',
+    ].join('\n'))
+
+    for(const record of records){
+        //歸檔時存了結果快照，這裡直接用，不必重算
+        const result = record.result || {voterCount: 0, entryCount: 0}
+        const counts = record.multiChar
+            ? `${result.voterCount} 人 / ${result.entryCount} 個角色`
+            : `${result.voterCount} 人`
+
+        embed.addFields({
+            name: clamp(record.title || '(無標題)', MAX_FIELD_NAME),
+            value: [
+                `\`${record.id}\``,
+                record.closeAt ? `結算於 ${timestamp(record.closeAt)}` : '結算時間不明',
+                `${counts}投票`,
+            ].join('　·　'),
+        })
+    }
+
+    return {embeds: [embed]}
 }

@@ -5,7 +5,7 @@ import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePan
 import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
-import {handlePollSelect, peekPoll} from '@/core/pollService'
+import {handlePollAction as pollAction, peekPoll} from '@/core/pollService'
 
 export const event = {
     name: Events.InteractionCreate
@@ -87,13 +87,21 @@ const handlePanelSelect = async(interaction) => {
     )
 }
 
-//投票的選單。回覆一律 ephemeral：投了什麼只有自己看得到。
+//投票面板上的所有操作。回覆一律 ephemeral：投了什麼只有自己看得到。
 //公開訊息刻意不顯示即時票數 —— 一來會有從眾效應，
 //二來每投一票就要編輯一次訊息，人多時很容易撞到速率限制。
-const handlePollVote = async(interaction, parsed) => {
-    await interaction.deferReply({flags: MessageFlags.Ephemeral})
-    const content = await handlePollSelect(interaction, parsed.kind, parsed.pollId)
-    await interaction.editReply(content)
+//
+//來源有兩種，回應方式不同：
+//  ・面板本身(ephemeral 訊息) → 就地更新那則面板
+//  ・公開訊息上的按鈕，或改版前發出的舊投票選單 → 開一則新的 ephemeral 面板
+const handlePollAction = async(interaction, parsed) => {
+    const fromPanel = Boolean(interaction.message && interaction.message.flags
+        && interaction.message.flags.has(MessageFlags.Ephemeral))
+
+    if(fromPanel) await interaction.deferUpdate()
+    else await interaction.deferReply({flags: MessageFlags.Ephemeral})
+
+    await interaction.editReply(await pollAction(interaction, parsed))
 }
 
 //「查看目前結果」按鈕。只有開放中途查看的投票才會掛這顆按鈕，
@@ -115,8 +123,9 @@ export const action = async(interaction) => {
         }
         if(interaction.isButton()){
             const parsed = parsePollCustomId(interaction.customId)
-            if(parsed && parsed.kind === 'peek'){
-                await handlePollPeek(interaction, parsed)
+            if(parsed){
+                if(parsed.kind === 'peek') await handlePollPeek(interaction, parsed)
+                else await handlePollAction(interaction, parsed)
                 return
             }
         }
@@ -127,7 +136,7 @@ export const action = async(interaction) => {
         if(interaction.isStringSelectMenu()){
             const parsed = parsePollCustomId(interaction.customId)
             if(parsed){
-                await handlePollVote(interaction, parsed)
+                await handlePollAction(interaction, parsed)
                 return
             }
         }

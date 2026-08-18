@@ -266,9 +266,69 @@ pm2 restart bc-test --update-env
 - [x] 4-B-3 `src/commands/poll/index.js` 指令與參數驗證
 - [x] 4-B-4 `interactionCreate` 分派、`ready` 開機還原
 - [x] 4-B-5 `tests/pollRender.test.js`、`tests/pollService.test.js`
-- [ ] 4-B-6 測試 jail `yarn test` 通過
-- [ ] 4-B-7 測試伺服器實機驗收（見下方五項）
-- [ ] 4-B-8 commit
+- [x] 4-B-6 測試 jail `yarn test` 通過（`重複結算只會貼一次結果` 暫標 it.skip，見下）
+- [x] 4-B-7 測試伺服器實機驗收：指令、選單、JSON 內容、時區換算皆正確（2026-08-18）
+- [x] 4-B-8 commit（`6dc6232`、`b3249a9`）
+- [x] 4-B-9 `peek` 參數 ＋ 查看按鈕、`/poll_peek`、`/poll_close`（`b3249a9`）
+
+### 4-B-2a 資料層改為一場一檔 ＋ 歸檔
+
+**為什麼改**：原本所有投票塞在單一 `polls.json`，結算後直接刪除。三個問題：查不到歷史、
+單一檔案壞掉全部陪葬、所有投票共用一條寫入佇列。
+
+| 項目 | 內容 |
+|---|---|
+| 檔案配置 | `data/polls/<id>.json` 進行中；`data/archive/YYYY-MM/<id>.json` 已結算 |
+| 結算語意 | 從「刪除」改為「移出進行中」，並附上結果快照（票數、名單、職業統計） |
+| 保留期限 | `ARCHIVE_RETENTION_DAYS = 90`（`src/config/polls.js`），開機時清理一次 |
+| 舊資料 | 開機自動把舊 `polls.json` 拆成一場一檔，原檔改名為 `.migrated` 保留 |
+| 併發 | 佇列改為「一場投票一條」，不同投票的寫入互不阻塞 |
+| 安全 | 新增 `isValidPollId()`。id 會組成檔名，不驗格式的話 `/poll_close id:../../..` 就能讀寫任意路徑 |
+
+**Progress**
+- [x] 2a-1 `src/config/polls.js`
+- [x] 2a-2 `pollStore.js` 改為一場一檔 ＋ id 驗證 ＋ 舊資料遷移
+- [x] 2a-3 `pollArchive.js`：歸檔、查詢、過期清理
+- [x] 2a-4 `pollService.closePoll` 改為歸檔
+- [x] 2a-5 `ready` 事件：遷移 → 還原 → 清理
+- [x] 2a-6 測試更新 ＋ `tests/pollArchive.test.js`
+- [ ] 2a-7 jail `yarn test` 通過
+- [ ] 2a-8 實機驗收：舊投票自動遷移、結算後出現在 `archive/`
+- [ ] 2a-9 commit
+
+### 4-B-2b 多角色 ＋ 歷史查詢
+
+| 項目 | 內容 |
+|---|---|
+| 資料 | `votes[userId]` 由單一物件改為陣列，每個角色一筆 `{entryId, options, identity}` |
+| 相容 | 舊的單一物件由 `normalizeEntries()` 即時轉成陣列，不改寫檔案；舊訊息的 customId 沒有 entryId，一律視為第一筆 |
+| 介面 | 公開訊息只留按鈕，選單搬進個人面板。一則訊息最多五列元件，撐不住多角色 |
+| 面板 | 一次編輯一個角色：選項選單 ＋ 身分選單 ＋ 角色切換選單 ＋ 新增/刪除按鈕（最多四列） |
+| 上限 | 一人最多 10 個角色（`MAX_ENTRIES_PER_USER`），達上限時新增鈕停用 |
+| 統計 | 票數單位是角色，百分比分母為角色數；報表同時顯示「N 人 / M 個角色」 |
+| 名單 | 有身分時同一人的多隻角色各列一次；沒有身分時去重，否則看起來像壞掉 |
+| 指令 | `/poll` 新增 `multi_char`；新增 `/poll_history`（清單 / id / keyword / `public`） |
+
+**Progress**
+- [x] 2b-1 `votes` 改為一人多筆 ＋ 舊格式相容
+- [x] 2b-2 customId 格式改為 `poll:<動作>:<投票id>[:<角色id>]`
+- [x] 2b-3 公開訊息改為按鈕、新增個人面板
+- [x] 2b-4 統計與報表改為「人數 / 角色數」
+- [x] 2b-5 `/poll` 的 `multi_char` 參數
+- [x] 2b-6 `/poll_history`（含 `public` 公開貼出）
+- [x] 2b-7 測試更新
+- [ ] 2b-8 jail `yarn test` 通過
+- [ ] 2b-9 實機驗收（見下）
+- [ ] 2b-10 commit
+
+**2b 實機驗收**
+1. `/poll` 不帶 `multi_char` → 公開訊息只有按鈕；點按鈕出現面板，選項可選、可取消
+2. 舊的那場投票（改版前發出的訊息）點下去仍然有反應，不會報錯
+3. `/poll multi_char:true identity:楓之谷` → 面板有「新增角色」；登記兩隻不同職業，切換選單可來回切
+4. 刪除其中一隻 → 只有那隻消失
+5. `/poll_peek` → 報表顯示「N 人 / M 個角色」，名單按職業分組
+6. `/poll_close` 後 `/poll_history` → 列得出該場；`/poll_history id:<id> public:true` → 公開貼到頻道
+
 - [ ] 4-C `/quickpoll`
 
 ### 測試環境限制（踩過的坑，加測試前先看）
