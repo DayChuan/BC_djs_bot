@@ -259,8 +259,8 @@ pm2 restart bc-test --update-env
 - [x] 4-A-3 `src/core/scheduler.js` node-cron 排程器
 - [x] 4-A-4 `package.json` 加 `node-cron`、`vitest` 與 `yarn test`
 - [x] 4-A-5 `tests/` 三支單元測試
-- [ ] 4-A-6 測試 jail `yarn install` + `yarn test` 全數通過
-- [ ] 4-A-7 commit
+- [x] 4-A-6 測試 jail `yarn install` + `yarn test` 全數通過（42/42，2026-08-18）
+- [x] 4-A-7 commit（`e0e0b15`、`981a098`、`e8f969d`）
 - [ ] 4-B `/poll`
 - [ ] 4-C `/quickpoll`
 
