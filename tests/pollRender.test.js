@@ -1,7 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import {
     buildClosedMessage,
-    buildHistoryList,
     buildMemberPanel,
     buildPollMessage,
     buildResultMessage,
@@ -130,25 +129,35 @@ describe('buildMemberPanel（個人面板）', () => {
         expect(panel.components).toHaveLength(1)
     })
 
-    it('單角色投票也有清除登記的按鈕', () => {
+    it('單角色投票的按鈕是投票＋清除', () => {
         const panel = buildMemberPanel(samplePoll(), 'u1')
         const buttons = panel.components[panel.components.length - 1].components
-        //沒有這顆的話，想撤銷登記只能把選項一個一個點掉
-        expect(buttons).toHaveLength(1)
-        expect(buttons[0].data.custom_id).toBe('poll:del:p_test01:e0')
-        expect(buttons[0].data.label).toBe('清除我的登記')
+        expect(buttons.map((button) => button.data.custom_id)).toEqual([
+            'poll:save:p_test01:e0',
+            'poll:del:p_test01:e0',
+        ])
+        //還沒登記過就是「投票」
+        expect(buttons[0].data.label).toBe('投票')
+        expect(buttons[1].data.label).toBe('清除我的登記')
     })
 
-    it('多角色投票有新增與清除，只有一個角色時不出現左右鍵', () => {
+    it('已經登記過的角色，按鈕文字變成修改', () => {
+        const poll = samplePoll({votes: {u1: [{entryId: 'e0', options: ['o0'], identity: null}]}})
+        const buttons = buildMemberPanel(poll, 'u1').components[1].components
+        expect(buttons[0].data.label).toBe('修改')
+    })
+
+    it('多角色投票多一顆新增角色', () => {
         const panel = buildMemberPanel(samplePoll({multiChar: true}), 'u1')
         const buttons = panel.components[panel.components.length - 1].components
         expect(buttons.map((button) => button.data.custom_id)).toEqual([
-            'poll:add:p_test01',
+            'poll:save:p_test01:e0',
             'poll:del:p_test01:e0',
+            'poll:add:p_test01',
         ])
     })
 
-    it('兩個以上角色時出現切換選單與刪除按鈕', () => {
+    it('兩隻以上角色時出現切換選單，且沒有左右鍵', () => {
         const poll = samplePoll({
             multiChar: true,
             identityGroup: 'maplestory',
@@ -161,36 +170,64 @@ describe('buildMemberPanel（個人面板）', () => {
         })
         const panel = buildMemberPanel(poll, 'u1', 'e1')
 
-        //選項、身分、切換、按鈕共四列，沒有超過 Discord 的五列上限
         expect(panel.components).toHaveLength(4)
         expect(rowData(panel, 2).custom_id).toBe('poll:sel:p_test01')
 
+        //左右鍵在兩隻角色時會產生相同的 customId，被 Discord 以
+        //COMPONENT_CUSTOM_ID_DUPLICATED 退回整則訊息，已經移除
         const buttons = panel.components[3].components
-        //左右鍵指向前一個/後一個角色，循環，所以兩顆都指向 e0
         expect(buttons.map((button) => button.data.custom_id)).toEqual([
-            'poll:add:p_test01',
+            'poll:save:p_test01:e1',
             'poll:del:p_test01:e1',
-            'poll:sel:p_test01:e0',
-            'poll:sel:p_test01:e0',
+            'poll:add:p_test01',
         ])
-        expect(buttons[1].data.label).toBe('刪除這個角色')
+        expect(buttons[1].data.label).toBe('刪除這隻角色')
     })
 
-    it('三個角色時左右鍵分別指向前後兩個', () => {
+    it('元件的 customId 全部不重複（Discord 會退回重複的）', () => {
+        const poll = samplePoll({
+            multiChar: true,
+            identityGroup: 'maplestory',
+            votes: {
+                u1: [
+                    {entryId: 'e0', options: ['o0'], identity: 'paladin'},
+                    {entryId: 'e1', options: ['o1'], identity: 'arch-mage'},
+                ],
+            },
+        })
+        const ids = buildMemberPanel(poll, 'u1', 'e0')
+            .components.flatMap((row) => row.components.map((c) => c.data.custom_id))
+        expect(new Set(ids).size).toBe(ids.length)
+    })
+
+    it('有草稿時顯示草稿內容並提示尚未送出', () => {
+        const poll = samplePoll({votes: {u1: [{entryId: 'e0', options: ['o0'], identity: null}]}})
+        const draft = {entryId: 'e0', options: ['o2'], identity: null}
+        const panel = buildMemberPanel(poll, 'u1', 'e0', {draft})
+
+        //選單勾的是草稿而不是檔案裡的內容
+        const options = rowData(panel, 0).options
+        expect(options.find((option) => option.value === 'o2').default).toBe(true)
+        expect(options.find((option) => option.value === 'o0').default).toBeFalsy()
+        expect(panel.embeds[0].data.description).toContain('尚未送出')
+    })
+
+    it('有草稿時擋住新增與切換角色', () => {
         const poll = samplePoll({
             multiChar: true,
             votes: {
                 u1: [
                     {entryId: 'e0', options: ['o0'], identity: null},
                     {entryId: 'e1', options: ['o1'], identity: null},
-                    {entryId: 'e2', options: ['o2'], identity: null},
                 ],
             },
         })
-        const panel = buildMemberPanel(poll, 'u1', 'e1')
-        const buttons = panel.components[panel.components.length - 1].components
-        expect(buttons[2].data.custom_id).toBe('poll:sel:p_test01:e0')
-        expect(buttons[3].data.custom_id).toBe('poll:sel:p_test01:e2')
+        const draft = {entryId: 'e0', options: ['o2'], identity: null}
+        const panel = buildMemberPanel(poll, 'u1', 'e0', {draft})
+
+        expect(rowData(panel, 2).disabled).toBe(true)
+        const add = panel.components[3].components.find((b) => b.data.custom_id === 'poll:add:p_test01')
+        expect(add.data.disabled).toBe(true)
     })
 
     it('指定的角色會成為正在編輯的那一個', () => {
@@ -345,39 +382,5 @@ describe('buildResultMessage', () => {
 describe('buildClosedMessage', () => {
     it('把元件清空，避免有人繼續點已截止的投票', () => {
         expect(buildClosedMessage(samplePoll()).components).toEqual([])
-    })
-})
-
-describe('buildHistoryList', () => {
-    const record = (overrides = {}) => ({
-        id: 'p_old001',
-        title: '上週副本時段',
-        closeAt: '2026-08-11T12:00:00.000Z',
-        multiChar: false,
-        result: {voterCount: 5, entryCount: 5},
-        ...overrides,
-    })
-
-    it('列出每場的 id、標題與人數', () => {
-        const embed = buildHistoryList([record()]).embeds[0].data
-        expect(embed.fields[0].name).toBe('上週副本時段')
-        expect(embed.fields[0].value).toContain('p_old001')
-        expect(embed.fields[0].value).toContain('5 人投票')
-    })
-
-    it('多角色的場次顯示人數與角色數', () => {
-        const embed = buildHistoryList([
-            record({multiChar: true, result: {voterCount: 3, entryCount: 7}}),
-        ]).embeds[0].data
-        expect(embed.fields[0].value).toContain('3 人 / 7 個角色')
-    })
-
-    it('沒有紀錄時給明確訊息', () => {
-        expect(buildHistoryList([]).embeds[0].data.description).toContain('沒有任何歷史投票')
-    })
-
-    it('有關鍵字但查無結果時，訊息要提到關鍵字', () => {
-        const embed = buildHistoryList([], {keyword: 'TRPG'}).embeds[0].data
-        expect(embed.description).toContain('TRPG')
     })
 })

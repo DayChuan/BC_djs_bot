@@ -307,7 +307,7 @@ pm2 restart bc-test --update-env
 | 上限 | 一人最多 10 個角色（`MAX_ENTRIES_PER_USER`），達上限時新增鈕停用 |
 | 統計 | 票數單位是角色，百分比分母為角色數；報表同時顯示「N 人 / M 個角色」 |
 | 名單 | 有身分時同一人的多隻角色各列一次；沒有身分時去重，否則看起來像壞掉 |
-| 指令 | `/poll` 新增 `multi_char`；新增 `/poll_history`（清單 / id / keyword / `public`） |
+| 指令 | `/poll` 新增 `multi_char`（`/poll_history` 後來由 `/poll_admin` 取代並刪除） |
 
 **Progress**
 - [x] 2b-1 `votes` 改為一人多筆 ＋ 舊格式相容
@@ -315,7 +315,7 @@ pm2 restart bc-test --update-env
 - [x] 2b-3 公開訊息改為按鈕、新增個人面板
 - [x] 2b-4 統計與報表改為「人數 / 角色數」
 - [x] 2b-5 `/poll` 的 `multi_char` 參數
-- [x] 2b-6 `/poll_history`（含 `public` 公開貼出）
+- [x] 2b-6 歷史查詢（後併入 `/poll_admin`，獨立指令已刪除）
 - [x] 2b-7 測試更新
 - [ ] 2b-8 jail `yarn test` 通過
 - [ ] 2b-9 實機驗收（見下）
@@ -327,7 +327,7 @@ pm2 restart bc-test --update-env
 3. `/poll multi_char:true identity:楓之谷` → 面板有「新增角色」；登記兩隻不同職業，切換選單可來回切
 4. 刪除其中一隻 → 只有那隻消失
 5. `/poll_peek` → 報表顯示「N 人 / M 個角色」，名單按職業分組
-6. `/poll_close` 後 `/poll_history` → 列得出該場；`/poll_history id:<id> public:true` → 公開貼到頻道
+6. `/poll_close` 後 `/poll_admin` → 列得出該場，可查看與公開分享
 
 ### 4-B-2c 管理面板 `/poll_admin`
 
@@ -343,7 +343,7 @@ pm2 restart bc-test --update-env
 | 已結束 | 查看完整結果、公開分享到頻道、刪除紀錄 |
 | 編輯 | Modal 五格：標題、說明、截止時間、每週發起、每週結算。**選項不可改** —— 已投的票綁在選項編號上，改了會對不上 |
 | 取消 | 不結算、不公布結果，但**仍然歸檔**並標記 `cancelled`，一樣受 90 天保留期限管理 |
-| 上限 | 選單最多 25 項；超過時提示改用 `/poll_history keyword:` 搜尋 |
+| 上限 | 選單最多 25 項；超過時說明還有幾場較舊的沒顯示 |
 
 編輯後會做兩件收尾：重掛排程（時間可能改了）、更新頻道訊息（標題可能改了）。
 少任何一件，畫面與實際行為就會對不上。
@@ -482,3 +482,19 @@ pm2 restart bc-test --update-env
 | 4 | TRPG 群組的角色清單內容（目前 `pollIdentities.js` 留空，空群組不會出現在指令選項裡） | Phase 4-B |
 | 5 | 日文分享的內容來源（本地單字表 / NHK RSS / LLM API）、頻道 ID、九點的時區 | Phase 5 |
 | 6 | 「帳號」是哪個系統的？NAS API 是否已存在、規格為何、誰可以用 | Phase 6 |
+
+---
+
+## Phase 8 — 跨多伺服器的設定維護（未開工）
+
+**問題**：現在是「一個 bot 進程 = 一個環境 = 一份設定」。`guildIds` 雖然是陣列，
+但 `channels` 與 `roles` 只有一份，而身分組 id 是**綁死在特定伺服器**的。
+現在這個結構真的加第二個伺服器就會壞：bot 會拿 A 伺服器的身分組 id 去 B 伺服器操作。
+
+**方向**：把每個伺服器的設定從程式碼搬到資料檔 `data/guilds/<guildId>.json`，
+由斜線指令維護（`/selfrole` 已經是這個模式）。理由是這些東西**本質上是資料不是程式常數** ——
+新增一個伺服器不該需要改程式碼、commit、部署。
+
+改完之後的流程：把 bot 邀進新伺服器 → 管理員用指令設定頻道與身分組 → 立刻可用。
+
+目前只有一個伺服器，不急。等要擴張時再做。

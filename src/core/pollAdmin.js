@@ -102,7 +102,8 @@ export const buildAdminList = (items, {notice = ''} = {}) => {
     const lines = shown.map((item) => `${kindLabel(item)}　**${item.poll.title}**　${itemTiming(item)}`)
 
     if(items.length > shown.length){
-        lines.push(`\n（還有 ${items.length - shown.length} 場沒顯示，用 \`/poll_history keyword:\` 搜尋）`)
+        lines.push(`
+（還有 ${items.length - shown.length} 場較舊的沒有顯示）`)
     }
 
     embed.setDescription([notice, '選一場來管理：', lines.join('\n')].filter(Boolean).join('\n\n'))

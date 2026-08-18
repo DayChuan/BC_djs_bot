@@ -107,7 +107,10 @@ const handlePollAction = async(interaction, parsed) => {
     if(fromPanel) await interaction.deferUpdate()
     else await interaction.deferReply({flags: MessageFlags.Ephemeral})
 
-    await interaction.editReply(await pollAction(interaction, parsed))
+    //回 null 代表「只更新草稿、畫面不用動」。
+    //選項每點一下就重繪面板的話，使用者每一下都要等一次 Discord 往返。
+    const payload = await pollAction(interaction, parsed, {fromPanel})
+    if(payload) await interaction.editReply(payload)
 }
 
 //管理面板。所有動作都在同一則 ephemeral 訊息上就地更新，

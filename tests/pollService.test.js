@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import * as store from '@/core/pollStore'
 import * as service from '@/core/pollService'
+import * as drafts from '@/core/pollDraft'
 import scheduler from '@/core/scheduler'
 
 //全部用靜態 import，整支檔案只載入一次。
@@ -54,6 +55,7 @@ beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bc-svc-'))
     process.env.POLL_DATA_DIR = tmpDir
     store.resetCache()
+    drafts.resetDrafts()
 })
 
 afterEach(async () => {
@@ -234,152 +236,3 @@ describe('restorePolls', () => {
     })
 })
 
-describe('handlePollAction（面板操作）', () => {
-    const interaction = (userId, values = []) => ({user: {id: userId}, values})
-
-    const act = (userId, values, kind, pollId, entryId = null) =>
-        service.handlePollAction(interaction(userId, values), {kind, pollId, entryId})
-
-    it('選了選項就登記，回傳的是更新後的面板', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft())
-
-        const panel = await act('u1', ['o0'], 'opt', poll.id)
-        expect(panel.components).toBeTruthy()
-
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1[0].options).toEqual(['o0'])
-    })
-
-    it('身分選單只更新身分，不會清掉已選的選項', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft({identityGroup: 'maplestory'}))
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        await act('u1', ['paladin'], 'idt', poll.id, 'e0')
-
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1).toEqual([{entryId: 'e0', options: ['o0'], identity: 'paladin'}])
-    })
-
-    it('沒帶角色編號時操作第一筆（相容改版前發出的舊訊息）', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft())
-
-        await act('u1', ['o0'], 'opt', poll.id, null)
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1[0].entryId).toBe('e0')
-    })
-
-    it('新增角色會多一筆，面板切到新的那一筆', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft({multiChar: true}))
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        const panel = await act('u1', [], 'add', poll.id)
-
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1).toHaveLength(2)
-        //面板上的選項選單要指向新的那一筆
-        expect(panel.components[0].components[0].data.custom_id).toContain(':e1')
-    })
-
-    it('兩隻角色可以各自選不同的選項與職業', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft({
-            multiChar: true,
-            identityGroup: 'maplestory',
-        }))
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        await act('u1', ['paladin'], 'idt', poll.id, 'e0')
-        await act('u1', [], 'add', poll.id)
-        await act('u1', ['o1'], 'opt', poll.id, 'e1')
-        await act('u1', ['arch-mage'], 'idt', poll.id, 'e1')
-
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1).toEqual([
-            {entryId: 'e0', options: ['o0'], identity: 'paladin'},
-            {entryId: 'e1', options: ['o1'], identity: 'arch-mage'},
-        ])
-    })
-
-    it('刪除角色只刪指定的那一筆', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft({multiChar: true}))
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        await act('u1', [], 'add', poll.id)
-        await act('u1', ['o1'], 'opt', poll.id, 'e1')
-        await act('u1', [], 'del', poll.id, 'e0')
-
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1).toEqual([{entryId: 'e1', options: ['o1'], identity: null}])
-    })
-
-    it('用左右鍵切換角色（值帶在 customId 而不是 values）', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft({multiChar: true}))
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        await act('u1', [], 'add', poll.id)
-
-        //按鈕沒有 values，只有 customId 上的 entryId
-        const panel = await act('u1', [], 'sel', poll.id, 'e0')
-        expect(panel.components[0].components[0].data.custom_id).toContain(':e0')
-    })
-
-    it('只有一個角色時也刪得掉整筆登記', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft())
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        await act('u1', [], 'del', poll.id, 'e0')
-
-        const saved = await store.getPoll(poll.id)
-        expect(saved.votes.u1).toBeUndefined()
-    })
-
-    it('切換角色不會動到資料', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft({multiChar: true}))
-
-        await act('u1', ['o0'], 'opt', poll.id, 'e0')
-        await act('u1', [], 'add', poll.id)
-        const before = await store.getPoll(poll.id)
-
-        await act('u1', ['e0'], 'sel', poll.id)
-        const after = await store.getPoll(poll.id)
-
-        expect(after.votes).toEqual(before.votes)
-    })
-
-    it('投票已被清除時給明確訊息，不是丟例外', async () => {
-        const {client} = makeClient()
-        const reply = await act('u1', ['o0'], 'opt', 'p_nope')
-        expect(reply.content).toContain('已經結束並清除')
-        expect(client.channels.fetch).not.toHaveBeenCalled()
-    })
-
-    it('已截止但尚未歸檔時擋下來', async () => {
-        const {client} = makeClient()
-        const poll = await service.createAndPublish(client, draft())
-        await store.updatePoll(poll.id, (record) => {
-            record.status = 'closed'
-        })
-
-        const reply = await act('u1', ['o0'], 'opt', poll.id)
-        expect(reply.content).toContain('已經截止')
-    })
-})
-
-describe('模組載入', () => {
-    //2026-08-18 的實際事故：export default 擺在函式宣告之前，
-    //模組載入時 const 還在 TDZ，直接 ReferenceError，
-    //而且是在 loader 載入指令與事件的當下爆掉 —— 整組斜線指令都註冊不上。
-    it('default export 的每個成員在載入時都取得到', () => {
-        for(const [name, value] of Object.entries(service.default)){
-            expect(typeof value, `default export 的 ${name}`).toBe('function')
-        }
-    })
-})

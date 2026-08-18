@@ -19,6 +19,7 @@ export const POLL_KINDS = new Set([
     'peek',     //公開訊息上的「查看目前結果」按鈕
     'opt',      //個人面板的選項選單
     'idt',      //個人面板的身分選單
+    'save',     //個人面板的「投票 / 修改」：把草稿寫進檔案
     'add',      //個人面板的「新增角色」
     'del',      //個人面板的「刪除這個角色」
     'sel',      //個人面板的角色切換選單
@@ -131,12 +132,22 @@ const entryTitle = (poll, entry, index) => {
 //因為是 ephemeral，選單可以帶 default 勾選 —— 使用者看得到自己目前的狀態。
 //activeEntryId 是「目前正在編輯哪一個角色」，一次只編輯一個，
 //這樣元件數量就跟角色數脫鉤，登記幾個角色都不會超過五列的限制。
-export const buildMemberPanel = (poll, userId, activeEntryId = null) => {
+export const buildMemberPanel = (poll, userId, activeEntryId = null, {draft = null, notice = ''} = {}) => {
     const entries = getEntries(poll, userId)
     const list = entries.length > 0 ? entries : [{entryId: 'e0', options: [], identity: null}]
 
     const activeIndex = Math.max(0, list.findIndex((entry) => entry.entryId === activeEntryId))
-    const active = list[activeIndex]
+    const saved = list[activeIndex]
+
+    //有草稿時，畫面上要顯示的是草稿的內容而不是檔案裡的內容
+    const isDraft = Boolean(draft && draft.entryId === saved.entryId)
+    const active = isDraft
+        ? {entryId: saved.entryId, options: draft.options, identity: draft.identity}
+        : saved
+
+    //這隻角色在檔案裡已經有登記了嗎？決定按鈕要寫「投票」還是「修改」
+    const alreadySaved = entries.some((entry) =>
+        entry.entryId === saved.entryId && (entry.options.length > 0 || entry.identity))
 
     const labelOf = (key) => {
         const option = poll.options.find((item) => item.key === key)
@@ -157,11 +168,13 @@ export const buildMemberPanel = (poll, userId, activeEntryId = null) => {
     })
 
     embed.setDescription([
+        notice,
         poll.multiChar
-            ? `你可以登記多個角色，一次編輯一個。目前有 ${list.length} 個。`
-            : '選好後直接關掉就行，截止前可以隨時回來改。',
+            ? `一次登記一隻角色，選好後按下方按鈕送出。目前有 ${list.length} 隻。`
+            : '選好後按下方按鈕送出，截止前可以隨時回來改。',
+        isDraft ? '⚠️ 有尚未送出的變更，離開前記得按下方按鈕。' : '',
         summary.join('\n'),
-    ].join('\n\n'))
+    ].filter(Boolean).join('\n\n'))
 
     const optionSelect = new StringSelectMenuBuilder()
         .setCustomId(customId('opt', poll.id, active.entryId))
@@ -196,7 +209,8 @@ export const buildMemberPanel = (poll, userId, activeEntryId = null) => {
     if(list.length > 1){
         const switcher = new StringSelectMenuBuilder()
             .setCustomId(customId('sel', poll.id))
-            .setPlaceholder('切換要編輯的角色')
+            .setPlaceholder(isDraft ? '請先送出或清除目前的變更' : '切換要編輯的角色')
+            .setDisabled(isDraft)
             .addOptions(list.map((entry, index) => ({
                 label: clamp(entryTitle(poll, entry, index), 100),
                 value: entry.entryId,
@@ -205,38 +219,31 @@ export const buildMemberPanel = (poll, userId, activeEntryId = null) => {
         components.push(new ActionRowBuilder().addComponents(switcher))
     }
 
-    const buttons = []
+    //送出鈕排第一個：它是這個面板的主要動作。
+    //選項與身分的選擇只存在草稿裡，按下去才會寫進檔案。
+    const buttons = [
+        new ButtonBuilder()
+            .setCustomId(customId('save', poll.id, active.entryId))
+            .setLabel(alreadySaved ? '修改' : '投票')
+            .setStyle(ButtonStyle.Primary),
+    ]
+
+    //一律給刪除鈕，即使只剩一隻角色。
+    //少了它，想撤銷登記只能把選項一個一個點掉，很難用。
+    //它也是「有未送出變更」時的逃生口：不想送出就用它清掉。
+    buttons.push(new ButtonBuilder()
+        .setCustomId(customId('del', poll.id, active.entryId))
+        .setLabel(list.length > 1 ? '刪除這隻角色' : '清除我的登記')
+        .setStyle(ButtonStyle.Danger))
 
     if(poll.multiChar){
         buttons.push(new ButtonBuilder()
             .setCustomId(customId('add', poll.id))
             .setLabel('新增角色')
             .setStyle(ButtonStyle.Success)
-            .setDisabled(list.length >= MAX_ENTRIES_PER_USER))
-    }
-
-    //一律給刪除鈕，即使只剩一個角色。
-    //少了它，想撤銷登記只能把選項一個一個點掉，很難用。
-    //只有一筆時它的語意就是「取消我的登記」，文字也跟著換。
-    buttons.push(new ButtonBuilder()
-        .setCustomId(customId('del', poll.id, active.entryId))
-        .setLabel(list.length > 1 ? '刪除這個角色' : '清除我的登記')
-        .setStyle(ButtonStyle.Danger))
-
-    //角色多的時候，選單之外再給左右鍵。
-    //選單要展開才看得到內容，來回切換時按鈕快得多。
-    if(list.length > 1){
-        const step = (offset) => list[(activeIndex + offset + list.length) % list.length].entryId
-        buttons.push(
-            new ButtonBuilder()
-                .setCustomId(customId('sel', poll.id, step(-1)))
-                .setLabel('◀ 上一個')
-                .setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder()
-                .setCustomId(customId('sel', poll.id, step(1)))
-                .setLabel('下一個 ▶')
-                .setStyle(ButtonStyle.Secondary),
-        )
+            //有未送出的變更時擋住：一次投票就是一隻角色，
+            //沒送出就換角色會讓人搞不清楚剛剛那些選擇跑去哪了
+            .setDisabled(isDraft || list.length >= MAX_ENTRIES_PER_USER))
     }
 
     components.push(new ActionRowBuilder().addComponents(...buttons))
@@ -339,44 +346,4 @@ export const buildClosedMessage = (poll) => {
         .setDescription(`這場投票已於 ${timestamp(poll.closeAt)} 結束，結果公布在下方訊息。`)
 
     return {embeds: [embed], components: []}
-}
-
-/////////////////////////////// 歷史查詢 ///////////////////////////////
-
-//歷史清單。只給概要，細節要另外用 id 查 —— 一次塞太多會超過 embed 上限。
-export const buildHistoryList = (records, {keyword = ''} = {}) => {
-    const embed = new EmbedBuilder()
-        .setColor(COLOR_CLOSED)
-        .setTitle('📚 過往投票紀錄')
-
-    if(records.length === 0){
-        embed.setDescription(keyword
-            ? `找不到標題含「${keyword}」的歷史投票。`
-            : '目前沒有任何歷史投票。')
-        return {embeds: [embed]}
-    }
-
-    embed.setDescription([
-        keyword ? `標題含「${keyword}」的結果，由新到舊：` : '由新到舊：',
-        '用 `/poll_history id:<id>` 看單場完整結果。',
-    ].join('\n'))
-
-    for(const record of records){
-        //歸檔時存了結果快照，這裡直接用，不必重算
-        const result = record.result || {voterCount: 0, entryCount: 0}
-        const counts = record.multiChar
-            ? `${result.voterCount} 人 / ${result.entryCount} 個角色`
-            : `${result.voterCount} 人`
-
-        embed.addFields({
-            name: clamp(record.title || '(無標題)', MAX_FIELD_NAME),
-            value: [
-                `\`${record.id}\``,
-                record.closeAt ? `結算於 ${timestamp(record.closeAt)}` : '結算時間不明',
-                `${counts}投票`,
-            ].join('　·　'),
-        })
-    }
-
-    return {embeds: [embed]}
 }

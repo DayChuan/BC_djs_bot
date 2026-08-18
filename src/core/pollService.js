@@ -13,6 +13,7 @@ import {
     updatePoll,
 } from '@/core/pollStore'
 import {archivePoll} from '@/core/pollArchive'
+import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
 import {
     ADMIN_PREFIX,
     applyEdit,
@@ -173,7 +174,7 @@ export const closePoll = async (client, pollId) => {
     if(poll.weekly) await scheduleNextRound(client, poll)
 
     //從 polls/ 搬到 archive/，並補上結果快照。
-    //「結算後清空」的語意是「移出進行中」，不是銷毀 —— 之後可用 /poll_history 查。
+    //「結算後清空」的語意是「移出進行中」，不是銷毀 —— 之後可用 /poll_admin 查。
     await archivePoll(poll)
     scheduler.cancel(closeKey(pollId))
 
@@ -210,52 +211,97 @@ export const restorePolls = async (client) => {
 
 /////////////////////////// 面板互動 ///////////////////////////
 
-//面板上的所有操作都走這裡，回傳「可以直接丟給 editReply() 的內容」。
-//查不到或已截止時回一段文字，呼叫端不必自己判斷型別。
+//面板上的所有操作。回傳「可以直接丟給 editReply() 的內容」，
+//或回 null 代表「不需要重繪畫面」。
 //
-//entryId 是要操作哪一個角色。改版前發出的舊投票訊息不帶這個值，
+//選選項與選身分只寫進記憶體草稿、不重繪 —— 每點一下都重繪一次面板的話，
+//使用者每一下都要等一次 Discord 往返，體驗很差。
+//真正寫檔的只有「投票 / 修改」按鈕。
+//
+//entryId 是要操作哪一隻角色。改版前發出的舊投票訊息不帶這個值，
 //此時一律當作第一筆處理，舊訊息才不會突然點不動。
-export const handlePollAction = async (interaction, {kind, pollId, entryId}) => {
+export const handlePollAction = async (interaction, {kind, pollId, entryId}, {fromPanel = true} = {}) => {
     const userId = interaction.user.id
-    let active = entryId
-    let poll = null
 
-    if(kind === 'opt' || kind === 'idt'){
-        //選單送回來的一定是「這個角色當下的完整選擇」，所以直接覆蓋
-        const ballot = kind === 'idt'
-            ? {identity: interaction.values[0] || null}
-            : {options: interaction.values}
-        poll = await castVote(pollId, userId, ballot, entryId)
-    }
-    else if(kind === 'add'){
-        poll = await addVoteEntry(pollId, userId)
-        if(poll){
-            //新增的一定是最後一筆，直接把面板切過去
-            const entries = getEntries(poll, userId)
-            const last = entries[entries.length - 1]
-            if(last) active = last.entryId
-        }
-    }
-    else if(kind === 'del'){
-        poll = await removeVoteEntry(pollId, userId, entryId)
-        //刪掉的就是當前這筆，讓面板自己退回第一筆
-        active = null
-    }
-    else if(kind === 'sel'){
-        //純粹切換畫面，不動資料。
-        //來源有兩種：切換選單(值在 values)與左右鍵(值在 customId 的 entryId)。
-        poll = await getPoll(pollId)
-        active = (interaction.values && interaction.values[0]) || entryId || null
-    }
-    else{
-        //'open'：只是把面板叫出來
-        poll = await getPoll(pollId)
-    }
-
+    const poll = await getPoll(pollId)
     if(!poll) return {content: '這場投票已經結束並清除了。'}
     if(poll.status !== 'open') return {content: '這場投票已經截止，不能再更改。'}
 
-    return buildMemberPanel(poll, userId, active)
+    const entries = getEntries(poll, userId)
+    const targetId = entryId || (entries[0] ? entries[0].entryId : 'e0')
+    const draft = getDraft(pollId, userId)
+
+    const panel = (activeId, notice) =>
+        buildMemberPanel(poll, userId, activeId, {draft: getDraft(pollId, userId), notice})
+
+    //選單操作：只更新草稿。草稿以「目前這隻角色」為單位，
+    //換角色前必須先送出或清除，對應「一次投票就是一隻角色」的邏輯。
+    if(kind === 'opt' || kind === 'idt'){
+        const base = (draft && draft.entryId === targetId)
+            ? draft
+            : (entries.find((entry) => entry.entryId === targetId) || {options: [], identity: null})
+
+        setDraft(pollId, userId, {
+            entryId: targetId,
+            options: kind === 'opt' ? interaction.values : base.options,
+            identity: kind === 'idt' ? (interaction.values[0] || null) : base.identity,
+        })
+
+        //從面板來的就不重繪，省下一次往返。
+        //從公開訊息(改版前的舊選單)來的沒有面板可以更新，還是得回一個。
+        return fromPanel ? null : panel(targetId)
+    }
+
+    //送出：草稿寫進檔案
+    if(kind === 'save'){
+        if(!draft || draft.entryId !== targetId){
+            return panel(targetId, '沒有需要送出的變更。')
+        }
+
+        await castVote(pollId, userId, {options: draft.options, identity: draft.identity}, targetId)
+        clearDraft(pollId, userId)
+
+        const updated = await getPoll(pollId)
+        const done = getEntries(updated, userId).some((entry) =>
+            entry.entryId === targetId && entry.options.length > 0)
+
+        return buildMemberPanel(updated, userId, targetId, {
+            notice: done ? '✅ 已送出。' : '✅ 已更新（這隻角色目前沒有選任何選項）。',
+        })
+    }
+
+    //刪除這隻角色：立即生效，並丟掉草稿。
+    //它同時是「不想送出」時的逃生口，所以不能也變成草稿操作。
+    if(kind === 'del'){
+        clearDraft(pollId, userId)
+        await removeVoteEntry(pollId, userId, targetId)
+
+        const updated = await getPoll(pollId)
+        return buildMemberPanel(updated, userId, null, {notice: '已清除這筆登記。'})
+    }
+
+    //新增角色：有未送出的變更就擋下來
+    if(kind === 'add'){
+        if(draft) return panel(draft.entryId, '⚠️ 請先按「投票」送出目前這隻角色，或按「清除我的登記」放棄。')
+
+        const updated = await addVoteEntry(pollId, userId)
+        if(!updated) return panel(targetId)
+
+        const list = getEntries(updated, userId)
+        const last = list[list.length - 1]
+        return buildMemberPanel(updated, userId, last ? last.entryId : null, {notice: '已新增一隻角色。'})
+    }
+
+    //切換角色：同樣要求先處理掉未送出的變更
+    if(kind === 'sel'){
+        if(draft) return panel(draft.entryId, '⚠️ 請先按「投票」送出目前這隻角色，或按「清除我的登記」放棄。')
+
+        const picked = (interaction.values && interaction.values[0]) || entryId || null
+        return panel(picked)
+    }
+
+    //'open'：把面板叫出來
+    return panel(draft ? draft.entryId : targetId)
 }
 
 /////////////////////////// 中途查看結果 ///////////////////////////
