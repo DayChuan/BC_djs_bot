@@ -219,6 +219,17 @@ describe('parseOptionsInput', () => {
         expect(store.parseOptionsInput('')).toEqual([])
         expect(store.parseOptionsInput(null)).toEqual([])
     })
+
+    it('只有逗號沒有內容時回空陣列', () => {
+        //安排：使用者只打了逗號(常見的手殘輸入)
+        const input = ',,,'
+
+        //執行
+        const result = store.parseOptionsInput(input)
+
+        //斷言：不能生出三個空白選項，指令端才會擋下來要他重打
+        expect(result).toEqual([])
+    })
 })
 
 describe('listActivePolls', () => {
