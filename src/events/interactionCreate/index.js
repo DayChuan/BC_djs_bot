@@ -5,7 +5,7 @@ import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePan
 import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
-import {handlePollSelect} from '@/core/pollService'
+import {handlePollSelect, peekPoll} from '@/core/pollService'
 
 export const event = {
     name: Events.InteractionCreate
@@ -96,6 +96,13 @@ const handlePollVote = async(interaction, parsed) => {
     await interaction.editReply(content)
 }
 
+//「查看目前結果」按鈕。只有開放中途查看的投票才會掛這顆按鈕，
+//所以這裡不必再檢查權限；回覆同樣是 ephemeral，不會洗版也不會影響其他人。
+const handlePollPeek = async(interaction, parsed) => {
+    await interaction.deferReply({flags: MessageFlags.Ephemeral})
+    await interaction.editReply(await peekPoll(parsed.pollId))
+}
+
 export const action = async(interaction) => {
     try{
         if(interaction.isChatInputCommand()){
@@ -105,6 +112,13 @@ export const action = async(interaction) => {
         if(interaction.isButton() && interaction.customId === PANEL_BUTTON_ID){
             await handlePanelOpen(interaction)
             return
+        }
+        if(interaction.isButton()){
+            const parsed = parsePollCustomId(interaction.customId)
+            if(parsed && parsed.kind === 'peek'){
+                await handlePollPeek(interaction, parsed)
+                return
+            }
         }
         if(interaction.isStringSelectMenu() && interaction.customId === PANEL_SELECT_ID){
             await handlePanelSelect(interaction)

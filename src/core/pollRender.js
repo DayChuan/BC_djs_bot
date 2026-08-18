@@ -1,4 +1,10 @@
-import {ActionRowBuilder, EmbedBuilder, StringSelectMenuBuilder} from 'discord.js'
+import {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    EmbedBuilder,
+    StringSelectMenuBuilder,
+} from 'discord.js'
 import {getIdentityGroup, identityLabel} from '@/config/pollIdentities'
 import {tally} from '@/core/pollStore'
 
@@ -7,6 +13,7 @@ import {tally} from '@/core/pollStore'
 //Discord 的 customId 上限是 100 字元，前綴 9 字 + id 13 字，離上限還很遠。
 export const POLL_OPTION_PREFIX = 'poll:opt:'
 export const POLL_IDENTITY_PREFIX = 'poll:idt:'
+export const POLL_PEEK_PREFIX = 'poll:peek:'
 
 const COLOR_OPEN = 0x5865F2
 const COLOR_CLOSED = 0x57F287
@@ -25,8 +32,15 @@ export const parsePollCustomId = (customId) => {
     if(text.startsWith(POLL_IDENTITY_PREFIX)){
         return {kind: 'identity', pollId: text.slice(POLL_IDENTITY_PREFIX.length)}
     }
+    if(text.startsWith(POLL_PEEK_PREFIX)){
+        return {kind: 'peek', pollId: text.slice(POLL_PEEK_PREFIX.length)}
+    }
     return null
 }
+
+//建立投票時沒指定 peek 就是允許中途查看。
+//用「不等於 false」而不是「等於 true」來判斷，舊資料沒有這個欄位時才會走到預設值。
+export const canPeek = (poll) => poll.peek !== false
 
 //超過長度就截斷並補刪節號。硬塞會被 Discord 整包退回，
 //結果是「結算時什麼都貼不出來」，比少列幾個人嚴重得多。
@@ -55,7 +69,9 @@ export const buildPollMessage = (poll) => {
         if(group) lines.push(`投票後請一併從第二個選單選擇你的${group.label}身分。`)
     }
     lines.push(`截止時間：${timestamp(poll.closeAt)}（${timestamp(poll.closeAt, 'R')}）`)
-    lines.push('選好後可以隨時改，以截止前最後一次為準。')
+    lines.push(canPeek(poll)
+        ? '選好後可以隨時改，以截止前最後一次為準。想看目前狀況就按下方按鈕（只有你看得到）。'
+        : '選好後可以隨時改，以截止前最後一次為準。這場投票的中途結果不公開。')
 
     const embed = new EmbedBuilder()
         .setColor(COLOR_OPEN)
@@ -88,6 +104,17 @@ export const buildPollMessage = (poll) => {
                 value: option.value,
             })))
         components.push(new ActionRowBuilder().addComponents(identitySelect))
+    }
+
+    //允許中途查看時才掛按鈕。不允許的話按鈕根本不存在，
+    //比「掛上去但點了說沒權限」乾淨 —— 管理員仍可用 /poll_peek 查看。
+    if(canPeek(poll)){
+        components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`${POLL_PEEK_PREFIX}${poll.id}`)
+                .setLabel('查看目前結果')
+                .setStyle(ButtonStyle.Secondary)
+        ))
     }
 
     return {embeds: [embed], components}
@@ -146,17 +173,27 @@ const formatVoters = (poll, option) => {
         .join('\n') || '—'
 }
 
-export const buildResultMessage = (poll) => {
+//live = true 是「投票還沒結束、中途查看」的版本。
+//內容與最終結算完全相同，只有標題與註記不一樣 —— 共用同一份程式碼，
+//才不會出現「中途看到的」跟「最後公布的」算法不一致這種問題。
+export const buildResultMessage = (poll, {live = false} = {}) => {
     const result = tally(poll)
 
     const embed = new EmbedBuilder()
-        .setColor(COLOR_CLOSED)
-        .setTitle(`📊 投票結果：${clamp(poll.title, 200)}`)
-        .setFooter({text: `共 ${result.voterCount} 人投票`})
-        .setTimestamp(new Date(poll.closeAt))
+        .setColor(live ? COLOR_OPEN : COLOR_CLOSED)
+        .setTitle(`📊 ${live ? '目前結果' : '投票結果'}：${clamp(poll.title, 200)}`)
+        .setFooter({
+            text: live
+                ? `目前 ${result.voterCount} 人投票 · 尚未截止，數字還會變動`
+                : `共 ${result.voterCount} 人投票`,
+        })
+
+    //結算版標上截止時間；即時版標「現在」，避免看起來像是舊資料
+    if(!live) embed.setTimestamp(new Date(poll.closeAt))
+    else embed.setTimestamp(new Date())
 
     if(result.voterCount === 0){
-        embed.setDescription('截止前沒有任何人投票。')
+        embed.setDescription(live ? '目前還沒有人投票。' : '截止前沒有任何人投票。')
         return {embeds: [embed]}
     }
 

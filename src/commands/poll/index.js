@@ -43,6 +43,9 @@ export const command = new SlashCommandBuilder()
         .setName('identity')
         .setDescription('是否附身分選單，選了投票者要一併選擇自己的身分')
         .addChoices(...identityChoices()))
+    .addBooleanOption((option) => option
+        .setName('peek')
+        .setDescription('是否開放所有人中途查看結果（預設是；設否則只有管理員能用 /poll_peek）'))
     .addIntegerOption((option) => option
         .setName('hours')
         .setDescription(`幾小時後截止（預設 ${DEFAULT_HOURS} 小時，每週重複時此項無效）`)
@@ -121,6 +124,10 @@ export const action = async(ctx) => {
         closeAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
     }
 
+    //沒填就是允許查看。getBoolean 沒填時回 null，不能直接當 false 用。
+    const peekOption = ctx.options.getBoolean('peek')
+    const peek = peekOption === null ? true : peekOption
+
     //先回覆再發投票。發訊息與寫檔可能超過 Discord 的三秒限制，
     //拖到逾時的話 interaction 會直接失效。
     await ctx.deferReply({flags: MessageFlags.Ephemeral})
@@ -134,6 +141,7 @@ export const action = async(ctx) => {
         options,
         multi: ctx.options.getBoolean('multi') || false,
         identityGroup: ctx.options.getString('identity') || null,
+        peek,
         weekly: weeklyConfig,
         createdBy: ctx.user.id,
         openAt: null,
@@ -156,7 +164,10 @@ export const action = async(ctx) => {
             `${WEEKDAYS[weeklyConfig.closeDay].name} ${weeklyConfig.closeTime} 結算（台北時間）。`
         )
     }
-    lines.push('結算後結果會貼在這個頻道，投票資料會一併清除。')
+    lines.push(peek
+        ? '所有人都可以按投票訊息上的按鈕查看目前結果（只有自己看得到）。'
+        : '中途結果不公開，只有管理員能用 `/poll_peek` 查看。')
+    lines.push('要提早結束可以用 `/poll_close`。結算後結果會貼在這個頻道。')
 
     await ctx.editReply(lines.join('\n'))
 }

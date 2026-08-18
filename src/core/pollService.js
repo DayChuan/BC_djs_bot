@@ -6,6 +6,7 @@ import {
     deletePoll,
     getPoll,
     listActivePolls,
+    listOpenPolls,
     updatePoll,
 } from '@/core/pollStore'
 import {
@@ -13,6 +14,7 @@ import {
     buildClosedMessage,
     buildPollMessage,
     buildResultMessage,
+    canPeek,
 } from '@/core/pollRender'
 
 //排程的 key。用投票 id 當一部分，重複註冊時 scheduler 會自動蓋掉舊的，
@@ -210,10 +212,52 @@ export const handlePollSelect = async (interaction, kind, pollId) => {
     return buildBallotReply(poll, interaction.user.id)
 }
 
+/////////////////////////// 中途查看結果 ///////////////////////////
+
+//回傳可以直接丟給 interaction.editReply() 的內容。
+//查不到或不允許查看時回一段文字，呼叫端不必自己判斷型別。
+//byAdmin 為 true 時略過 peek 設定 —— 管理員用 /poll_peek 永遠看得到。
+export const peekPoll = async (pollId, {byAdmin = false} = {}) => {
+    const poll = await getPoll(pollId)
+    if(!poll) return {content: '這場投票已經結束並清除了。'}
+    if(!byAdmin && !canPeek(poll)) return {content: '這場投票不開放中途查看結果。'}
+
+    return buildResultMessage(poll, {live: true})
+}
+
+//指令沒指定 id 時，用「這個頻道進行中的投票」來推斷。
+//剛好一場就直接用它，多於一場就要求指定 —— 猜錯會結算到不該結算的那場。
+export const findOpenPollsInChannel = async (channelId) => {
+    const polls = await listOpenPolls()
+    return polls.filter((poll) => poll.channelId === channelId)
+}
+
+///poll_close 與 /poll_peek 共用的目標解析。
+//回傳 {poll} 或 {error}，呼叫端只要判斷有沒有 error 就好。
+export const resolveCommandPoll = async (channelId, pollId) => {
+    if(pollId){
+        const poll = await getPoll(pollId)
+        if(!poll) return {error: `找不到 id 為 \`${pollId}\` 的投票，它可能已經結算並清除了。`}
+        return {poll}
+    }
+
+    const polls = await findOpenPollsInChannel(channelId)
+    if(polls.length === 0) return {error: '這個頻道目前沒有進行中的投票。'}
+    if(polls.length > 1){
+        const list = polls.map((poll) => `　\`${poll.id}\`　${poll.title}`).join('\n')
+        return {error: `這個頻道有 ${polls.length} 場進行中的投票，請用 \`id\` 參數指定：\n${list}`}
+    }
+
+    return {poll: polls[0]}
+}
+
 export default {
     createAndPublish,
     publishPending,
     closePoll,
     restorePolls,
     handlePollSelect,
+    peekPoll,
+    findOpenPollsInChannel,
+    resolveCommandPoll,
 }

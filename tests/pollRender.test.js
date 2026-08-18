@@ -8,6 +8,7 @@ import {
     percentBar,
     POLL_IDENTITY_PREFIX,
     POLL_OPTION_PREFIX,
+    POLL_PEEK_PREFIX,
 } from '@/core/pollRender'
 
 const samplePoll = (overrides = {}) => ({
@@ -64,9 +65,9 @@ describe('percentBar', () => {
 })
 
 describe('buildPollMessage', () => {
-    it('沒有身分群組時只有一列選單', () => {
+    it('沒有身分群組時只有一列選單，外加一列查看按鈕', () => {
         const message = buildPollMessage(samplePoll())
-        expect(message.components).toHaveLength(1)
+        expect(message.components).toHaveLength(2)
 
         const select = message.components[0].components[0].data
         expect(select.custom_id).toBe(`${POLL_OPTION_PREFIX}p_test01`)
@@ -82,14 +83,14 @@ describe('buildPollMessage', () => {
 
     it('有身分群組時多一列身分選單', () => {
         const message = buildPollMessage(samplePoll({identityGroup: 'maplestory'}))
-        expect(message.components).toHaveLength(2)
+        expect(message.components).toHaveLength(3)
         expect(message.components[1].components[0].data.custom_id)
             .toBe(`${POLL_IDENTITY_PREFIX}p_test01`)
     })
 
     it('身分群組是空的(TRPG)時不會生出沒有選項的選單', () => {
         const message = buildPollMessage(samplePoll({identityGroup: 'trpg'}))
-        expect(message.components).toHaveLength(1)
+        expect(message.components).toHaveLength(2)
     })
 })
 
@@ -180,5 +181,50 @@ describe('buildBallotReply', () => {
             votes: {u1: {options: ['o0'], identity: null}},
         })
         expect(buildBallotReply(poll, 'u1')).toContain('身分：尚未選擇')
+    })
+})
+
+describe('中途查看結果（peek）', () => {
+    it('預設掛上查看按鈕', () => {
+        //舊資料沒有 peek 欄位時也要視為允許，不能整個功能消失
+        const message = buildPollMessage(samplePoll())
+        const button = message.components[1].components[0].data
+        expect(button.custom_id).toBe(`${POLL_PEEK_PREFIX}p_test01`)
+        expect(button.label).toBe('查看目前結果')
+    })
+
+    it('peek 設為 false 時不掛按鈕', () => {
+        const message = buildPollMessage(samplePoll({peek: false}))
+        //只剩選項選單那一列
+        expect(message.components).toHaveLength(1)
+    })
+
+    it('有身分選單時按鈕排在第三列', () => {
+        const message = buildPollMessage(samplePoll({identityGroup: 'maplestory'}))
+        expect(message.components).toHaveLength(3)
+        expect(message.components[2].components[0].data.custom_id)
+            .toBe(`${POLL_PEEK_PREFIX}p_test01`)
+    })
+
+    it('parsePollCustomId 認得查看按鈕', () => {
+        expect(parsePollCustomId(`${POLL_PEEK_PREFIX}p_abc`)).toEqual({kind: 'peek', pollId: 'p_abc'})
+    })
+
+    it('即時版與結算版用同一套統計，只有標題與註記不同', () => {
+        const poll = samplePoll({votes: {u1: {options: ['o0'], identity: null}}})
+
+        const live = buildResultMessage(poll, {live: true}).embeds[0].data
+        const final = buildResultMessage(poll).embeds[0].data
+
+        expect(live.title).toContain('目前結果')
+        expect(final.title).toContain('投票結果')
+        expect(live.footer.text).toContain('尚未截止')
+        //欄位內容必須一模一樣，否則中途看到的跟最後公布的會對不起來
+        expect(live.fields).toEqual(final.fields)
+    })
+
+    it('即時版沒有人投票時給的是「目前還沒有人投票」', () => {
+        const embed = buildResultMessage(samplePoll(), {live: true}).embeds[0].data
+        expect(embed.description).toContain('目前還沒有人投票')
     })
 })
