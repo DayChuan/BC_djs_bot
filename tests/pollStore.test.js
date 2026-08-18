@@ -1,0 +1,197 @@
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+
+//POLLS_FILE 必須在模組載入前就設好，所以這裡一律用動態 import，
+//並先 resetModules() 讓每個測試拿到全新的模組實體(否則 POLLS_FILE 會停在第一次載入時的值)。
+//靜態 import 會被提升到檔案最上面，來不及吃到 beforeEach 設的環境變數。
+let tmpDir = null
+let store = null
+
+beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bc-poll-'))
+    process.env.POLLS_FILE = path.join(tmpDir, 'polls.json')
+    vi.resetModules()
+    store = await import('@/core/pollStore')
+})
+
+afterEach(async () => {
+    delete process.env.POLLS_FILE
+    await fs.rm(tmpDir, {recursive: true, force: true})
+})
+
+const samplePoll = (overrides = {}) => ({
+    type: 'standard',
+    title: '本週副本時段',
+    multi: true,
+    identityGroup: 'maplestory',
+    options: [
+        {key: 'o0', label: '星期二'},
+        {key: 'o1', label: '星期三'},
+        {key: 'o2', label: '星期四'},
+    ],
+    votes: {},
+    ...overrides,
+})
+
+describe('applyVote', () => {
+    it('複選會整組覆蓋，而不是累加', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0', 'o1']})
+        store.applyVote(poll, 'u1', {options: ['o2']})
+        expect(poll.votes.u1.options).toEqual(['o2'])
+    })
+
+    it('單選投票即使前端送多個也只留第一個', () => {
+        const poll = samplePoll({multi: false})
+        store.applyVote(poll, 'u1', {options: ['o0', 'o1']})
+        expect(poll.votes.u1.options).toEqual(['o0'])
+    })
+
+    it('不存在的選項會被丟掉(不信任前端送來的 key)', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0', 'not-exist']})
+        expect(poll.votes.u1.options).toEqual(['o0'])
+    })
+
+    it('只送身分時不會動到已選的選項', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0']})
+        store.applyVote(poll, 'u1', {identity: 'paladin'})
+        expect(poll.votes.u1).toEqual({options: ['o0'], identity: 'paladin'})
+    })
+
+    it('選項清空且沒有身分 = 取消投票，整筆移除', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0']})
+        store.applyVote(poll, 'u1', {options: []})
+        expect(poll.votes.u1).toBeUndefined()
+    })
+})
+
+describe('tally', () => {
+    it('分母是投票人數，複選時百分比不會爆掉', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0', 'o1'], identity: 'paladin'})
+        store.applyVote(poll, 'u2', {options: ['o0'], identity: 'shadower'})
+
+        const result = store.tally(poll)
+        expect(result.voterCount).toBe(2)
+        expect(result.options[0]).toMatchObject({key: 'o0', count: 2, percent: 100})
+        expect(result.options[1]).toMatchObject({key: 'o1', count: 1, percent: 50})
+        expect(result.options[2]).toMatchObject({key: 'o2', count: 0, percent: 0})
+    })
+
+    it('統計各選項底下的身分分佈與整體身分人數', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0'], identity: 'paladin'})
+        store.applyVote(poll, 'u2', {options: ['o0'], identity: 'paladin'})
+        store.applyVote(poll, 'u3', {options: ['o1'], identity: 'shadower'})
+
+        const result = store.tally(poll)
+        expect(result.options[0].identities).toEqual({paladin: 2})
+        expect(result.identityTotals).toEqual({paladin: 2, shadower: 1})
+    })
+
+    it('沒有人投票時不會除以零', () => {
+        const result = store.tally(samplePoll())
+        expect(result.voterCount).toBe(0)
+        expect(result.options.every((option) => option.percent === 0)).toBe(true)
+    })
+})
+
+describe('檔案持久化', () => {
+    it('建立後立刻落盤，重讀快取仍拿得到同一筆', async () => {
+        const created = await store.createPoll(samplePoll())
+        expect(created.id).toMatch(/^p_/)
+        expect(created.status).toBe('open')
+
+        store.resetCache()
+        const reloaded = await store.getPoll(created.id)
+        expect(reloaded.title).toBe('本週副本時段')
+    })
+
+    it('castVote 寫進檔案，模擬重啟後票還在', async () => {
+        const created = await store.createPoll(samplePoll())
+        await store.castVote(created.id, 'u1', {options: ['o0'], identity: 'paladin'})
+
+        store.resetCache()
+        const reloaded = await store.getPoll(created.id)
+        expect(reloaded.votes.u1).toEqual({options: ['o0'], identity: 'paladin'})
+    })
+
+    it('已結算的投票不再收票', async () => {
+        const created = await store.createPoll(samplePoll())
+        await store.updatePoll(created.id, (poll) => {
+            poll.status = 'closed'
+        })
+        await store.castVote(created.id, 'u1', {options: ['o0']})
+
+        const reloaded = await store.getPoll(created.id)
+        expect(reloaded.votes.u1).toBeUndefined()
+    })
+
+    it('deletePoll 只刪該筆，其他進行中的投票留著', async () => {
+        const a = await store.createPoll(samplePoll({title: 'A'}))
+        const b = await store.createPoll(samplePoll({title: 'B'}))
+
+        expect(await store.deletePoll(a.id)).toBe(true)
+        store.resetCache()
+
+        const polls = await store.readPolls()
+        expect(Object.keys(polls)).toEqual([b.id])
+    })
+
+    it('listOpenPolls 只回進行中的', async () => {
+        const a = await store.createPoll(samplePoll({title: 'A'}))
+        await store.createPoll(samplePoll({title: 'B', status: 'closed'}))
+
+        const open = await store.listOpenPolls()
+        expect(open.map((poll) => poll.id)).toEqual([a.id])
+    })
+
+    it('併發投票不會互相覆寫', async () => {
+        const created = await store.createPoll(samplePoll())
+
+        //不 await、同時打進去，模擬多人同一瞬間點選單
+        await Promise.all(
+            Array.from({length: 50}, (_, i) =>
+                store.castVote(created.id, `u${i}`, {options: ['o0']})
+            )
+        )
+
+        store.resetCache()
+        const reloaded = await store.getPoll(created.id)
+        expect(Object.keys(reloaded.votes)).toHaveLength(50)
+    })
+
+    it('回傳的是複本，外面改它不會污染快取', async () => {
+        const created = await store.createPoll(samplePoll())
+        const first = await store.getPoll(created.id)
+        first.title = '被改掉了'
+
+        const second = await store.getPoll(created.id)
+        expect(second.title).toBe('本週副本時段')
+    })
+
+    it('檔案壞掉時備份原檔並從空的開始，不會直接覆蓋', async () => {
+        await fs.writeFile(process.env.POLLS_FILE, '{ 這不是 JSON', 'utf8')
+
+        const polls = await store.readPolls()
+        expect(polls).toEqual({})
+
+        const files = await fs.readdir(tmpDir)
+        expect(files.some((name) => name.includes('.broken-'))).toBe(true)
+    })
+})
+
+describe('makePollId', () => {
+    it('長度夠短，塞得進 Discord 的 customId 上限', () => {
+        expect(store.makePollId(1755400000000, 0.5).length).toBeLessThan(20)
+    })
+
+    it('同一毫秒內產生的 id 不會相同', () => {
+        expect(store.makePollId(1755400000000, 0.1)).not.toBe(store.makePollId(1755400000000, 0.9))
+    })
+})

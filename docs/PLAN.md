@@ -99,7 +99,7 @@ pm2 restart bc-test --update-env
 - [ ] T-3 jail 內 `git clone -b test`，手動放入測試站 `.env`，`yarn install`
 - [ ] T-4 寫 `/root/update.sh` 並手動跑通一次
 - [ ] T-5 設定 cron 每日執行 `update.sh`
-- [ ] T-6 導入 vitest，跑通第一個單元測試
+- [x] T-6 導入 vitest（Phase 4-A 已加入 `vitest` 與 `yarn test`，待在 jail 內跑通）
 - [ ] T-7 建立 `docs/ENVIRONMENTS.md` 記錄正式 / 測試環境差異
 - [ ] T-8 完成上述四項驗收
 
@@ -178,8 +178,8 @@ pm2 restart bc-test --update-env
 3. 寫入 state 後重啟 bot，內容仍在
 
 **Progress**
-- [ ] 2-A 升級 discord.js
-- [ ] 2-B `scheduler.js`
+- [ ] 2-A 升級 discord.js（原因是原生 Poll API，Phase 4 已改為自建投票，此項不再必要）
+- [x] 2-B `scheduler.js`（併入 Phase 4-A 完成）
 - [ ] 2-C `state.js`
 - [ ] 2-D 啟動時還原排程
 - [ ] 2-E 驗收
@@ -220,31 +220,49 @@ pm2 restart bc-test --update-env
 
 ---
 
-## Phase 4 — 功能 2-2　每週投票
+## Phase 4 — 功能 2-2　投票系統
 
-**需求**：`maple-story` 頻道底下的討論串，每週日發起投票，週二前統計人數。投票標題為該討論串名稱，選項為固定的九個時段。
+> **2026-08-17 改寫。** 原設計是「用 discord.js 原生 Poll API 發每週時段投票」，**已作廢**：
+> 原生 poll 不支援自訂的身分選單、不支援自訂結算格式，投票資料也不在我們手上，
+> 無法滿足「以 JSON 維護、結算後整理到頻道並清空」的需求。改為元件式（選單／按鈕）自建投票，
+> 方向與 `docs/Functions/Claude_Handover_Voting_System.md` 一致。
 
-**選項**（固定順序）：
-星期二、星期三、星期四、星期五、星期六下午、星期六晚上、星期日下午、星期日晚上、星期一
+**需求**：兩個斜線指令。
 
-**設計**：
-- 新增 `src/jobs/weeklyPoll.js`，由 Phase 2-B 的排程器觸發
-- 每週日固定時間，對目標討論串各發一則原生 poll，標題用討論串名稱，選項為上述九項，允許複選
-- poll 到期時間設為到週二統計時間為止，由 Discord 端自動結束並公布結果
-- 發出的 poll 訊息 id 記入 state，週二排程時讀回結果彙整成一則摘要貼出
+1. `/poll` — 完整投票。可設定名稱、內容、選項、可否複選、是否附身分選單、是否每週重複。
+2. `/quickpoll` — 語音頻道用的快速二／三／四選一，即時顯示百分比占比。
 
-**待確認**（阻擋開工）
-1. `maple-story` 的頻道 ID？要發投票的是**該頻道下所有討論串**，還是你指定的幾串？
-2. 週日發起的**確切時間**、週二統計的**確切時間**？
-3. 投票是否允許複選？（時段調查通常是複選，我先假設允許）
-4. 統計摘要要貼在原討論串，還是集中貼在 `maple-story` 頻道？
+**身分選單的語意**：建立投票時綁定一個「身分群組」（楓之谷 / TRPG…），投票者就會在該場投票
+看到那個群組的職業清單並選擇自己的職業。純字串紀錄，不碰 Discord 身分組 API。
+表放在 `src/config/pollIdentities.js`，加職業或加群組只改這一個檔案。
+
+**快速投票的顏色**：Discord 按鈕只有紅(`Danger`)、藍(`Primary`)、綠(`Success`)、灰(`Secondary`)
+四種內建色，**沒有黃色**。經確認全部採用內建色，不掛 emoji：
+二選一＝紅藍、三選一＝紅藍灰、四選一＝紅藍灰綠。
+
+**資料**：`data/polls.json`（已在 `.gitignore`）。一場投票一個 key，結算後只刪該筆，
+其他進行中的投票不受影響。
+
+**設計（分三個子階段，一次做一個）**
+
+| 子階段 | 內容 |
+|---|---|
+| 4-A 地基 | `src/config/pollIdentities.js` 身分表；`src/core/pollStore.js` JSON 持久化（單一 Promise 佇列串行化讀寫、暫存檔 + rename 原子寫入、壞檔備份）；`src/core/scheduler.js`（`node-cron`，時區 `Asia/Taipei`，一次性排程分段等待避開 setTimeout 32 位元上限）；導入 vitest |
+| 4-B `/poll` | 指令與參數、Embed + 選項選單 + 身分選單、`interactionCreate` 分派、到期結算（貼結果、移除元件、刪該筆）、`weekly` 自動排下一輪、`main.js` 啟動時還原未結束的投票 |
+| 4-C `/quickpoll` | `choices` 2/3/4 → 內建四色按鈕、即時更新百分比長條、同樣進 polls.json 撐過重啟 |
+
+> 4-A 已含原 Phase 2-B（排程器）與 Phase T-6（vitest）的內容，那兩項不再另外做。
 
 **Progress**
-- [ ] 4-A 確認上述四項
-- [ ] 4-B 發起投票的 job
-- [ ] 4-C 週二統計與摘要
-- [ ] 4-D 驗收
-- [ ] 4-E commit
+- [x] 4-A-1 `src/config/pollIdentities.js` 身分表 + 靜態檢查
+- [x] 4-A-2 `src/core/pollStore.js` JSON 持久化與併發防護
+- [x] 4-A-3 `src/core/scheduler.js` node-cron 排程器
+- [x] 4-A-4 `package.json` 加 `node-cron`、`vitest` 與 `yarn test`
+- [x] 4-A-5 `tests/` 三支單元測試
+- [ ] 4-A-6 測試 jail `yarn install` + `yarn test` 全數通過
+- [ ] 4-A-7 commit
+- [ ] 4-B `/poll`
+- [ ] 4-C `/quickpoll`
 
 ---
 
@@ -333,6 +351,6 @@ pm2 restart bc-test --update-env
 | 1 | GitHub repo 是 public 還是 private？ | T-2 |
 | 2 | `yarn.lock` 是否納入版控？ | T-3 |
 | 3 | 靜音的 360 秒是筆誤還是刻意？ | Phase 3 |
-| 4 | `maple-story` 頻道 ID、目標討論串範圍、發起與統計的確切時間、是否複選、摘要貼哪 | Phase 4 |
+| 4 | TRPG 群組的角色清單內容（目前 `pollIdentities.js` 留空，空群組不會出現在指令選項裡） | Phase 4-B |
 | 5 | 日文分享的內容來源（本地單字表 / NHK RSS / LLM API）、頻道 ID、九點的時區 | Phase 5 |
 | 6 | 「帳號」是哪個系統的？NAS API 是否已存在、規格為何、誰可以用 | Phase 6 |
