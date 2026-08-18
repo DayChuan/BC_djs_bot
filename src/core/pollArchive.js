@@ -42,12 +42,15 @@ const listFiles = async (month) => {
 //結算時呼叫：把投票搬進 archive/，並補上結果快照。
 //快照的用途是「以後查歷史不必重算」，也讓當時的結論固定下來 ——
 //統計程式碼日後改了，回頭看舊投票才不會得到跟當初公布的不一樣的數字。
-export const archivePoll = async (poll) => {
+//reason 為 'cancelled' 時代表是管理員直接取消、沒有結算。
+//一樣進歸檔而不是直接刪除 —— 誰在什麼時候砍掉一場投票，是該留痕跡的事。
+export const archivePoll = async (poll, {reason = 'closed', by = null} = {}) => {
     const archivedAt = new Date().toISOString()
     const record = {
         ...poll,
-        status: 'closed',
+        status: reason === 'cancelled' ? 'cancelled' : 'closed',
         archivedAt,
+        archivedBy: by,
         result: tally(poll),
     }
 
@@ -57,8 +60,30 @@ export const archivePoll = async (poll) => {
     //先寫歸檔再刪原檔。順序反過來的話，中間當機就兩邊都沒有。
     await deletePoll(poll.id)
 
-    logger.info(`投票已歸檔：${poll.id}「${poll.title}」→ archive/${month}/`)
+    logger.info(
+        `投票已歸檔：${poll.id}「${poll.title}」→ archive/${month}/ ` +
+        `狀態=${record.status}${by ? ` by=${by}` : ''}`
+    )
     return record
+}
+
+//刪掉一筆歷史紀錄。管理面板用，真的要清掉時才呼叫。
+export const deleteArchived = async (id) => {
+    if(!isValidPollId(id)) return false
+
+    for(const month of await listMonths()){
+        const file = path.join(monthDir(month), `${id}.json`)
+        try{
+            await fs.unlink(file)
+            logger.info(`歷史投票已刪除：${id}（archive/${month}/）`)
+            return true
+        }
+        catch(e){
+            if(e.code !== 'ENOENT') throw e
+        }
+    }
+
+    return false
 }
 
 /////////////////////////////// 查詢 ///////////////////////////////
@@ -135,6 +160,7 @@ export const purgeExpired = async (days = ARCHIVE_RETENTION_DAYS, now = Date.now
 export default {
     archiveDir,
     archivePoll,
+    deleteArchived,
     getArchived,
     listArchived,
     purgeExpired,

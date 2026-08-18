@@ -205,22 +205,41 @@ export const buildMemberPanel = (poll, userId, activeEntryId = null) => {
         components.push(new ActionRowBuilder().addComponents(switcher))
     }
 
+    const buttons = []
+
     if(poll.multiChar){
-        const buttons = [
-            new ButtonBuilder()
-                .setCustomId(customId('add', poll.id))
-                .setLabel('新增角色')
-                .setStyle(ButtonStyle.Success)
-                .setDisabled(list.length >= MAX_ENTRIES_PER_USER),
-        ]
-        if(list.length > 1){
-            buttons.push(new ButtonBuilder()
-                .setCustomId(customId('del', poll.id, active.entryId))
-                .setLabel('刪除這個角色')
-                .setStyle(ButtonStyle.Danger))
-        }
-        components.push(new ActionRowBuilder().addComponents(...buttons))
+        buttons.push(new ButtonBuilder()
+            .setCustomId(customId('add', poll.id))
+            .setLabel('新增角色')
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(list.length >= MAX_ENTRIES_PER_USER))
     }
+
+    //一律給刪除鈕，即使只剩一個角色。
+    //少了它，想撤銷登記只能把選項一個一個點掉，很難用。
+    //只有一筆時它的語意就是「取消我的登記」，文字也跟著換。
+    buttons.push(new ButtonBuilder()
+        .setCustomId(customId('del', poll.id, active.entryId))
+        .setLabel(list.length > 1 ? '刪除這個角色' : '清除我的登記')
+        .setStyle(ButtonStyle.Danger))
+
+    //角色多的時候，選單之外再給左右鍵。
+    //選單要展開才看得到內容，來回切換時按鈕快得多。
+    if(list.length > 1){
+        const step = (offset) => list[(activeIndex + offset + list.length) % list.length].entryId
+        buttons.push(
+            new ButtonBuilder()
+                .setCustomId(customId('sel', poll.id, step(-1)))
+                .setLabel('◀ 上一個')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(customId('sel', poll.id, step(1)))
+                .setLabel('下一個 ▶')
+                .setStyle(ButtonStyle.Secondary),
+        )
+    }
+
+    components.push(new ActionRowBuilder().addComponents(...buttons))
 
     return {embeds: [embed], components}
 }

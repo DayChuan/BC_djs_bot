@@ -172,3 +172,34 @@ export default {
     nextWeeklyDate,
     chunkDelay,
 }
+
+//把「YYYY-MM-DD HH:mm(台北時間)」轉成 Date。給管理面板的編輯視窗用。
+//不合法時回 null 而不是拋錯 —— 這是使用者手打的內容，錯了要給提示不是崩潰。
+export const parseTaipeiDateTime = (text) => {
+    const matched = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})$/.exec(String(text || '').trim())
+    if(!matched) return null
+
+    const [, year, month, day, hour, minute] = matched.map(Number)
+    if(month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null
+
+    //先當成台北的當地時間組出來，再平移回真正的 UTC 時間軸
+    const local = Date.UTC(year, month - 1, day, hour, minute)
+    const target = new Date(local - TAIPEI_OFFSET_MS)
+
+    //Date.UTC 會把 2 月 31 日自動進位成 3 月 3 日，這種要擋掉
+    const check = new Date(local)
+    if(check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null
+
+    return target
+}
+
+//反向：把 ISO 時間顯示成台北的「YYYY-MM-DD HH:mm」，填進編輯視窗的預設值
+export const formatTaipeiDateTime = (iso) => {
+    const time = new Date(iso).getTime()
+    if(!Number.isFinite(time)) return ''
+
+    const local = new Date(time + TAIPEI_OFFSET_MS)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())} ` +
+        `${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}`
+}

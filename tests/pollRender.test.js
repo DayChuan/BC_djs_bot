@@ -130,17 +130,22 @@ describe('buildMemberPanel（個人面板）', () => {
         expect(panel.components).toHaveLength(1)
     })
 
-    it('單角色投票沒有新增/刪除按鈕', () => {
+    it('單角色投票也有清除登記的按鈕', () => {
         const panel = buildMemberPanel(samplePoll(), 'u1')
-        expect(panel.components).toHaveLength(1)
+        const buttons = panel.components[panel.components.length - 1].components
+        //沒有這顆的話，想撤銷登記只能把選項一個一個點掉
+        expect(buttons).toHaveLength(1)
+        expect(buttons[0].data.custom_id).toBe('poll:del:p_test01:e0')
+        expect(buttons[0].data.label).toBe('清除我的登記')
     })
 
-    it('多角色投票有新增按鈕，但只有一個角色時沒有刪除鈕', () => {
+    it('多角色投票有新增與清除，只有一個角色時不出現左右鍵', () => {
         const panel = buildMemberPanel(samplePoll({multiChar: true}), 'u1')
         const buttons = panel.components[panel.components.length - 1].components
-        expect(buttons[0].data.custom_id).toBe('poll:add:p_test01')
-        //刪光了就沒得投，所以最後一個角色不給刪
-        expect(buttons).toHaveLength(1)
+        expect(buttons.map((button) => button.data.custom_id)).toEqual([
+            'poll:add:p_test01',
+            'poll:del:p_test01:e0',
+        ])
     })
 
     it('兩個以上角色時出現切換選單與刪除按鈕', () => {
@@ -161,8 +166,31 @@ describe('buildMemberPanel（個人面板）', () => {
         expect(rowData(panel, 2).custom_id).toBe('poll:sel:p_test01')
 
         const buttons = panel.components[3].components
-        expect(buttons.map((button) => button.data.custom_id))
-            .toEqual(['poll:add:p_test01', 'poll:del:p_test01:e1'])
+        //左右鍵指向前一個/後一個角色，循環，所以兩顆都指向 e0
+        expect(buttons.map((button) => button.data.custom_id)).toEqual([
+            'poll:add:p_test01',
+            'poll:del:p_test01:e1',
+            'poll:sel:p_test01:e0',
+            'poll:sel:p_test01:e0',
+        ])
+        expect(buttons[1].data.label).toBe('刪除這個角色')
+    })
+
+    it('三個角色時左右鍵分別指向前後兩個', () => {
+        const poll = samplePoll({
+            multiChar: true,
+            votes: {
+                u1: [
+                    {entryId: 'e0', options: ['o0'], identity: null},
+                    {entryId: 'e1', options: ['o1'], identity: null},
+                    {entryId: 'e2', options: ['o2'], identity: null},
+                ],
+            },
+        })
+        const panel = buildMemberPanel(poll, 'u1', 'e1')
+        const buttons = panel.components[panel.components.length - 1].components
+        expect(buttons[2].data.custom_id).toBe('poll:sel:p_test01:e0')
+        expect(buttons[3].data.custom_id).toBe('poll:sel:p_test01:e2')
     })
 
     it('指定的角色會成為正在編輯的那一個', () => {

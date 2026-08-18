@@ -363,3 +363,46 @@ describe('一人多角色', () => {
         expect(result.options[1].percent).toBe(50)
     })
 })
+
+describe('編輯某個角色不會動到其他角色', () => {
+    it('剛新增、還沒選東西的角色不會被順手清掉', () => {
+        //這是實際踩到的 bug：按了新增角色之後回頭改前一個角色，
+        //那筆空的就消失了，切換選單跟著不見，看起來像不能修改其他角色
+        const poll = samplePoll({multiChar: true})
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.addEntry(poll, 'u1')
+
+        store.applyVote(poll, 'u1', {options: ['o1']}, 'e0')
+
+        expect(poll.votes.u1).toHaveLength(2)
+        expect(poll.votes.u1[1]).toEqual({entryId: 'e1', options: [], identity: null})
+    })
+
+    it('清空其中一隻的選項，其他隻原封不動', () => {
+        const poll = samplePoll({multiChar: true})
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.applyVote(poll, 'u1', {options: ['o1']}, 'e1')
+
+        store.applyVote(poll, 'u1', {options: []}, 'e1')
+
+        expect(poll.votes.u1[0]).toEqual({entryId: 'e0', options: ['o0'], identity: null})
+        expect(poll.votes.u1[1]).toEqual({entryId: 'e1', options: [], identity: null})
+    })
+
+    it('只有一筆而且清空時，仍然視為取消投票', () => {
+        const poll = samplePoll()
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.applyVote(poll, 'u1', {options: []}, 'e0')
+        expect(poll.votes.u1).toBeUndefined()
+    })
+
+    it('空的角色不會被算進統計', () => {
+        const poll = samplePoll({multiChar: true})
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.addEntry(poll, 'u1')
+
+        const result = store.tally(poll)
+        expect(result.entryCount).toBe(1)
+        expect(result.voterCount).toBe(1)
+    })
+})

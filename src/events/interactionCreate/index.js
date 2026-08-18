@@ -5,7 +5,13 @@ import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePan
 import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
-import {handlePollAction as pollAction, peekPoll} from '@/core/pollService'
+import {
+    handleAdminAction,
+    handleAdminEditSubmit,
+    handlePollAction as pollAction,
+    peekPoll,
+} from '@/core/pollService'
+import {buildEditModal, findAdminItem, parseAdminCustomId} from '@/core/pollAdmin'
 
 export const event = {
     name: Events.InteractionCreate
@@ -104,6 +110,24 @@ const handlePollAction = async(interaction, parsed) => {
     await interaction.editReply(await pollAction(interaction, parsed))
 }
 
+//管理面板。所有動作都在同一則 ephemeral 訊息上就地更新，
+//管理員不會被一堆新訊息洗版，也不必記任何 id。
+const handleAdmin = async(interaction, parsed) => {
+    //開 Modal 必須直接對 interaction 呼叫，不能先 defer，所以要單獨處理
+    if(parsed.action === 'edit'){
+        const item = await findAdminItem(parsed.pollId)
+        if(!item){
+            await interaction.reply({content: '那場投票已經不存在了。', flags: MessageFlags.Ephemeral})
+            return
+        }
+        await interaction.showModal(buildEditModal(item.poll))
+        return
+    }
+
+    await interaction.deferUpdate()
+    await interaction.editReply(await handleAdminAction(interaction, parsed))
+}
+
 //「查看目前結果」按鈕。只有開放中途查看的投票才會掛這顆按鈕，
 //所以這裡不必再檢查權限；回覆同樣是 ephemeral，不會洗版也不會影響其他人。
 const handlePollPeek = async(interaction, parsed) => {
@@ -120,6 +144,26 @@ export const action = async(interaction) => {
         if(interaction.isButton() && interaction.customId === PANEL_BUTTON_ID){
             await handlePanelOpen(interaction)
             return
+        }
+        //編輯視窗送出。Modal 沒有原本那則面板可以更新，所以另開一則 ephemeral 回覆。
+        if(interaction.isModalSubmit()){
+            const parsed = parseAdminCustomId(interaction.customId)
+            if(parsed && parsed.action === 'save'){
+                await interaction.deferReply({flags: MessageFlags.Ephemeral})
+                const fields = Object.fromEntries(
+                    ['title', 'description', 'closeAt', 'weeklyOpen', 'weeklyClose']
+                        .map((id) => [id, interaction.fields.getTextInputValue(id)])
+                )
+                await interaction.editReply(await handleAdminEditSubmit(interaction, parsed.pollId, fields))
+                return
+            }
+        }
+        if(interaction.isButton() || interaction.isStringSelectMenu()){
+            const admin = parseAdminCustomId(interaction.customId)
+            if(admin){
+                await handleAdmin(interaction, admin)
+                return
+            }
         }
         if(interaction.isButton()){
             const parsed = parsePollCustomId(interaction.customId)

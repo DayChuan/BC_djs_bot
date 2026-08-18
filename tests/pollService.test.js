@@ -317,6 +317,29 @@ describe('handlePollAction（面板操作）', () => {
         expect(saved.votes.u1).toEqual([{entryId: 'e1', options: ['o1'], identity: null}])
     })
 
+    it('用左右鍵切換角色（值帶在 customId 而不是 values）', async () => {
+        const {client} = makeClient()
+        const poll = await service.createAndPublish(client, draft({multiChar: true}))
+
+        await act('u1', ['o0'], 'opt', poll.id, 'e0')
+        await act('u1', [], 'add', poll.id)
+
+        //按鈕沒有 values，只有 customId 上的 entryId
+        const panel = await act('u1', [], 'sel', poll.id, 'e0')
+        expect(panel.components[0].components[0].data.custom_id).toContain(':e0')
+    })
+
+    it('只有一個角色時也刪得掉整筆登記', async () => {
+        const {client} = makeClient()
+        const poll = await service.createAndPublish(client, draft())
+
+        await act('u1', ['o0'], 'opt', poll.id, 'e0')
+        await act('u1', [], 'del', poll.id, 'e0')
+
+        const saved = await store.getPoll(poll.id)
+        expect(saved.votes.u1).toBeUndefined()
+    })
+
     it('切換角色不會動到資料', async () => {
         const {client} = makeClient()
         const poll = await service.createAndPublish(client, draft({multiChar: true}))

@@ -14,6 +14,17 @@ import {
 } from '@/core/pollStore'
 import {archivePoll} from '@/core/pollArchive'
 import {
+    ADMIN_PREFIX,
+    applyEdit,
+    buildAdminDetail,
+    buildAdminList,
+    buildResultView,
+    collectAdminItems,
+    findAdminItem,
+    parseEditFields,
+    purgeRecord,
+} from '@/core/pollAdmin'
+import {
     buildMemberPanel,
     buildClosedMessage,
     buildPollMessage,
@@ -231,9 +242,10 @@ export const handlePollAction = async (interaction, {kind, pollId, entryId}) => 
         active = null
     }
     else if(kind === 'sel'){
-        //純粹切換畫面，不動資料
+        //純粹切換畫面，不動資料。
+        //來源有兩種：切換選單(值在 values)與左右鍵(值在 customId 的 entryId)。
         poll = await getPoll(pollId)
-        active = interaction.values[0] || null
+        active = (interaction.values && interaction.values[0]) || entryId || null
     }
     else{
         //'open'：只是把面板叫出來
@@ -294,4 +306,176 @@ export default {
     peekPoll,
     findOpenPollsInChannel,
     resolveCommandPoll,
+    cancelPoll,
+    applyPollEdit,
+    handleAdminAction,
+    handleAdminEditSubmit,
+}
+
+/////////////////////////// 管理面板 ///////////////////////////
+
+//取消一場投票：不結算、不公布結果，但仍然歸檔留痕跡。
+//誰在什麼時候砍掉一場投票是該查得到的事，所以不是直接刪檔。
+export const cancelPoll = async (client, pollId, by = null) => {
+    let skipped = false
+    const poll = await updatePoll(pollId, (record) => {
+        if(record.status !== 'open' && record.status !== 'pending'){
+            skipped = true
+            return false
+        }
+        record.status = 'cancelled'
+    })
+
+    if(!poll || skipped) return null
+
+    //已經發出去的訊息要改掉，不然頻道裡會留一則點得動卻沒作用的投票
+    if(poll.messageId){
+        const channel = await fetchChannel(client, poll.channelId)
+        if(channel){
+            try{
+                const message = await channel.messages.fetch(poll.messageId)
+                await message.edit({
+                    embeds: [{
+                        title: `🗳️ ${poll.title}（已取消）`,
+                        description: '這場投票已被管理員取消，不會公布結果。',
+                        color: 0xED4245,
+                    }],
+                    components: [],
+                })
+            }
+            catch(e){
+                logger.warn(`取消投票 ${pollId} 時無法更新原訊息(可能已被刪除)：`, e)
+            }
+        }
+    }
+
+    scheduler.cancel(closeKey(pollId))
+    scheduler.cancel(openKey(pollId))
+
+    await archivePoll(poll, {reason: 'cancelled', by})
+    logger.info(`投票已取消：${pollId}「${poll.title}」by=${by}`)
+
+    return poll
+}
+
+//編輯之後要做兩件收尾：把排程重掛(時間可能改了)、把頻道訊息更新(標題可能改了)。
+//少了任何一件，畫面與實際行為就會對不上。
+export const applyPollEdit = async (client, pollId, patch) => {
+    const poll = await applyEdit(pollId, patch)
+    if(!poll) return null
+
+    if(poll.status === 'open'){
+        scheduler.scheduleAt(closeKey(poll.id), new Date(poll.closeAt), () => closePoll(client, poll.id))
+
+        if(poll.messageId){
+            const channel = await fetchChannel(client, poll.channelId)
+            if(channel){
+                try{
+                    const message = await channel.messages.fetch(poll.messageId)
+                    await message.edit(buildPollMessage(poll))
+                }
+                catch(e){
+                    logger.warn(`編輯投票 ${pollId} 後無法更新原訊息：`, e)
+                }
+            }
+        }
+    }
+    else if(poll.status === 'pending' && poll.openAt){
+        scheduler.scheduleAt(openKey(poll.id), new Date(poll.openAt), () => publishPending(client, poll.id))
+    }
+
+    logger.info(`投票已編輯：${pollId}「${poll.title}」`)
+    return poll
+}
+
+//管理面板的動作分派。回傳可直接丟給 editReply() 的內容。
+//'edit' 不在這裡處理 —— 開啟 Modal 必須直接對 interaction 呼叫 showModal()，
+//不能先 defer，所以由事件層處理。
+export const handleAdminAction = async (interaction, {action, pollId}) => {
+    const by = interaction.user.tag
+    const client = interaction.client
+
+    const backToList = async (notice) => buildAdminList(await collectAdminItems(), {notice})
+
+    const detailOf = async (id, notice) => {
+        const item = await findAdminItem(id)
+        if(!item) return backToList('那場投票已經不存在了。')
+        return buildAdminDetail(item, {notice})
+    }
+
+    //選單選了一場，或按鈕回到某一場
+    if(action === 'pick') return detailOf(interaction.values[0])
+    if(action === 'back') return backToList()
+
+    if(!pollId) return backToList()
+
+    const item = await findAdminItem(pollId)
+    if(!item) return backToList('那場投票已經不存在了。')
+
+    if(action === 'peek' || action === 'view'){
+        //結果單獨顯示，附一顆回去的按鈕，不然管理員會卡在結果畫面
+        return {
+            ...buildResultView(item),
+            components: [{
+                type: 1,
+                components: [{
+                    type: 2, style: 2, label: '◀ 回列表',
+                    custom_id: `${ADMIN_PREFIX}back`,
+                }],
+            }],
+        }
+    }
+
+    if(action === 'close'){
+        if(item.kind !== 'open') return detailOf(pollId, '這場投票不是進行中，無法結算。')
+        await closePoll(client, pollId)
+        return backToList(`已結算「${item.poll.title}」，結果已貼在原頻道。`)
+    }
+
+    if(action === 'publish'){
+        if(item.kind !== 'pending') return detailOf(pollId, '這場投票不是排程中，無法立即發布。')
+        await publishPending(client, pollId)
+        return backToList(`已立即發布「${item.poll.title}」。`)
+    }
+
+    if(action === 'cancel'){
+        const cancelled = await cancelPoll(client, pollId, by)
+        if(!cancelled) return detailOf(pollId, '這場投票的狀態已經改變，沒有執行取消。')
+        return backToList(`已取消「${item.poll.title}」，紀錄保留在歷史中。`)
+    }
+
+    if(action === 'share'){
+        if(item.kind !== 'archived') return detailOf(pollId, '只有已結束的投票才能公開分享。')
+        await interaction.channel.send({
+            content: `📌 ${interaction.user} 分享了一場過往投票的結果`,
+            ...buildResultMessage(item.poll),
+        })
+        logger.info(`公開分享歷史投票：${pollId}「${item.poll.title}」by=${by}`)
+        return detailOf(pollId, '已把結果貼到這個頻道。')
+    }
+
+    if(action === 'purge'){
+        if(item.kind !== 'archived') return detailOf(pollId, '只有已結束的投票才能刪除紀錄。')
+        await purgeRecord(pollId, by)
+        return backToList(`已刪除「${item.poll.title}」的歷史紀錄。`)
+    }
+
+    return backToList()
+}
+
+//Modal 送出後的處理。驗證失敗時回錯誤文字，不寫入任何東西。
+export const handleAdminEditSubmit = async (interaction, pollId, fields) => {
+    const item = await findAdminItem(pollId)
+    if(!item) return buildAdminList(await collectAdminItems(), {notice: '那場投票已經不存在了。'})
+    if(item.kind === 'archived'){
+        return buildAdminDetail(item, {notice: '已結束的投票不能編輯。'})
+    }
+
+    const {patch, error} = parseEditFields(item.poll, fields)
+    if(error) return buildAdminDetail(item, {notice: `⚠️ ${error}　沒有做任何修改。`})
+
+    await applyPollEdit(interaction.client, pollId, patch)
+
+    const updated = await findAdminItem(pollId)
+    return buildAdminDetail(updated, {notice: '已更新。'})
 }

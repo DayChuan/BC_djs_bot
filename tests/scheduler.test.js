@@ -1,5 +1,12 @@
 import {describe, it, expect, afterEach, vi} from 'vitest'
-import scheduler, {weeklyCron, chunkDelay, nextWeeklyDate, MAX_TIMEOUT} from '@/core/scheduler'
+import scheduler, {
+    weeklyCron,
+    chunkDelay,
+    nextWeeklyDate,
+    parseTaipeiDateTime,
+    formatTaipeiDateTime,
+    MAX_TIMEOUT,
+} from '@/core/scheduler'
 
 afterEach(() => {
     scheduler.cancelAll()
@@ -151,5 +158,37 @@ describe('scheduleCron', () => {
 
     it('不合法的 cron 運算式要拋錯', () => {
         expect(() => scheduler.scheduleCron('c2', 'not a cron', () => undefined)).toThrow()
+    })
+})
+
+describe('parseTaipeiDateTime / formatTaipeiDateTime', () => {
+    it('台北時間轉成 UTC', () => {
+        expect(parseTaipeiDateTime('2026-08-18 14:00').toISOString())
+            .toBe('2026-08-18T06:00:00.000Z')
+    })
+
+    it('台北的凌晨會落在前一天的 UTC', () => {
+        expect(parseTaipeiDateTime('2026-08-18 01:00').toISOString())
+            .toBe('2026-08-17T17:00:00.000Z')
+    })
+
+    it('格式錯誤回 null 而不是拋錯(這是使用者手打的內容)', () => {
+        expect(parseTaipeiDateTime('2026/08/18 14:00')).toBeNull()
+        expect(parseTaipeiDateTime('2026-08-18')).toBeNull()
+        expect(parseTaipeiDateTime('')).toBeNull()
+    })
+
+    it('不存在的日期要擋掉，不能自動進位成下個月', () => {
+        expect(parseTaipeiDateTime('2026-02-31 10:00')).toBeNull()
+        expect(parseTaipeiDateTime('2026-13-01 10:00')).toBeNull()
+    })
+
+    it('轉回去顯示的是台北時間', () => {
+        expect(formatTaipeiDateTime('2026-08-18T06:00:00.000Z')).toBe('2026-08-18 14:00')
+    })
+
+    it('來回轉換不會跑掉', () => {
+        const text = '2026-12-31 23:59'
+        expect(formatTaipeiDateTime(parseTaipeiDateTime(text).toISOString())).toBe(text)
     })
 })

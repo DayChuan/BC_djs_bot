@@ -106,11 +106,17 @@ export const applyVote = (poll, userId, ballot = {}, entryId = null) => {
         ? entries.map((entry, i) => (i === index ? updated : entry))
         : [...entries, updated]
 
-    //整筆都空了就移除這個角色，避免留下空票影響分母
-    const cleaned = next.filter((entry) => entry.options.length > 0 || entry.identity)
+    //只動目標那一筆，其他角色一律原封不動。
+    //早期版本會把所有「空的」角色一起清掉 —— 於是按了新增角色之後，
+    //只要回頭改前一個角色，那筆剛新增、還沒選東西的就被順手刪了，
+    //切換選單跟著消失，看起來就像不能修改其他角色。
+    //空的角色留著沒有副作用：tally 只看有選項的，統計不會被影響。
+    const onlyOneAndEmpty = next.length === 1
+        && next[0].options.length === 0
+        && !next[0].identity
 
-    if(cleaned.length === 0) delete poll.votes[userId]
-    else poll.votes[userId] = cleaned
+    if(onlyOneAndEmpty) delete poll.votes[userId]
+    else poll.votes[userId] = next
 
     return poll
 }
