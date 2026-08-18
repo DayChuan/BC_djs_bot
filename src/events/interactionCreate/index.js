@@ -6,9 +6,12 @@ import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
 import {
+    checkQuickEnd,
+    closePoll,
     handleAdminAction,
     handleAdminEditSubmit,
     handlePollAction as pollAction,
+    handleQuickVote,
     peekPoll,
 } from '@/core/pollService'
 import {buildEditModal, findAdminItem, parseAdminCustomId} from '@/core/pollAdmin'
@@ -131,6 +134,29 @@ const handleAdmin = async(interaction, parsed) => {
     await interaction.editReply(await handleAdminAction(interaction, parsed))
 }
 
+//快速投票：訊息本身就是公開即時更新的，所以直接就地改那則訊息，
+//不像一般投票要另開個人面板。
+const handleQuick = async(interaction, parsed) => {
+    if(parsed.kind === 'qend'){
+        //權限要在 defer 之前檢查完 —— deferUpdate 之後就不能再用
+        //ephemeral 回覆拒絕了，只能默默什麼都不做。
+        const error = await checkQuickEnd(interaction, parsed.pollId)
+        if(error){
+            await interaction.reply({content: error, flags: MessageFlags.Ephemeral})
+            return
+        }
+
+        await interaction.deferUpdate()
+        //closePoll 會把原訊息換成最終結果，這裡不必再 editReply
+        await closePoll(interaction.client, parsed.pollId)
+        return
+    }
+
+    await interaction.deferUpdate()
+    const payload = await handleQuickVote(interaction, parsed)
+    if(payload) await interaction.editReply(payload)
+}
+
 //「查看目前結果」按鈕。只有開放中途查看的投票才會掛這顆按鈕，
 //所以這裡不必再檢查權限；回覆同樣是 ephemeral，不會洗版也不會影響其他人。
 const handlePollPeek = async(interaction, parsed) => {
@@ -171,7 +197,8 @@ export const action = async(interaction) => {
         if(interaction.isButton()){
             const parsed = parsePollCustomId(interaction.customId)
             if(parsed){
-                if(parsed.kind === 'peek') await handlePollPeek(interaction, parsed)
+                if(parsed.kind === 'q' || parsed.kind === 'qend') await handleQuick(interaction, parsed)
+                else if(parsed.kind === 'peek') await handlePollPeek(interaction, parsed)
                 else await handlePollAction(interaction, parsed)
                 return
             }

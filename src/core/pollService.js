@@ -14,6 +14,7 @@ import {
 } from '@/core/pollStore'
 import {archivePoll} from '@/core/pollArchive'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
+import {PermissionFlagsBits} from 'discord.js'
 import {
     ADMIN_PREFIX,
     applyEdit,
@@ -27,6 +28,7 @@ import {
 } from '@/core/pollAdmin'
 import {
     buildMemberPanel,
+    buildQuickMessage,
     buildClosedMessage,
     buildPollMessage,
     buildResultMessage,
@@ -37,6 +39,12 @@ import {
 //所以同一場投票不管經過幾次重啟或還原，都只會有一份排程、只會結算一次。
 const closeKey = (pollId) => `poll:close:${pollId}`
 const openKey = (pollId) => `poll:open:${pollId}`
+
+//快速投票與一般投票的訊息長得不一樣：前者公開即時顯示比數，
+//後者只放按鈕、內容藏在個人面板裡。
+const messagePayload = (poll) => (poll.type === 'quick'
+    ? buildQuickMessage(poll)
+    : buildPollMessage(poll))
 
 const fetchChannel = async (client, channelId) => {
     const channel = await client.channels.fetch(channelId).catch(() => null)
@@ -57,7 +65,7 @@ const sendPollMessage = async (client, poll) => {
         return null
     }
 
-    const message = await channel.send(buildPollMessage(poll))
+    const message = await channel.send(messagePayload(poll))
 
     const updated = await updatePoll(poll.id, (record) => {
         record.messageId = message.id
@@ -153,18 +161,24 @@ export const closePoll = async (client, pollId) => {
 
     //原訊息可能已被刪除。刪掉就算了，重點是結果要貼得出來，
     //所以這裡失敗只記錄，不中斷後面的流程。
+    //快速投票就地把原訊息換成最終結果，不另外再發一則 ——
+    //它本來就是即時顯示的，語音現場再洗一則訊息只是噪音。
+    const quick = poll.type === 'quick'
+
     if(channel && poll.messageId){
         try{
             const message = await channel.messages.fetch(poll.messageId)
-            await message.edit(buildClosedMessage(poll))
+            await message.edit(quick ? buildQuickMessage(poll, {closed: true}) : buildClosedMessage(poll))
         }
         catch(e){
             logger.warn(`投票 ${pollId} 的原訊息無法更新(可能已被刪除)：`, e)
         }
     }
 
-    if(channel) await channel.send(buildResultMessage(poll))
-    else logger.error(`投票 ${pollId} 找不到頻道 ${poll.channelId}，結果無法公布`)
+    if(!quick){
+        if(channel) await channel.send(buildResultMessage(poll))
+        else logger.error(`投票 ${pollId} 找不到頻道 ${poll.channelId}，結果無法公布`)
+    }
 
     //有每週設定就先排好下一輪，再處理這一筆。
     //順序反過來的話，中間當機就會兩邊都沒有。
@@ -400,7 +414,7 @@ export const applyPollEdit = async (client, pollId, patch) => {
             if(channel){
                 try{
                     const message = await channel.messages.fetch(poll.messageId)
-                    await message.edit(buildPollMessage(poll))
+                    await message.edit(messagePayload(poll))
                 }
                 catch(e){
                     logger.warn(`編輯投票 ${pollId} 後無法更新原訊息：`, e)
@@ -472,15 +486,6 @@ export const handleAdminAction = async (interaction, {action, pollId}) => {
         return backToList(`已取消「${item.poll.title}」，紀錄保留在歷史中。`)
     }
 
-    //一人多角色是建立時的參數，但 Modal 只放得下五個輸入框，已經滿了。
-    //做成開關按鈕：已經在跑的投票也能改，不必取消重開。
-    //已投的票不受影響 —— 舊資料本來就是一人一筆，開啟後只是可以再加第二筆。
-    if(action === 'mchar'){
-        if(item.kind === 'archived') return detailOf(pollId, '已結束的投票不能修改。')
-        await applyPollEdit(client, pollId, {multiChar: !item.poll.multiChar})
-        return detailOf(pollId, item.poll.multiChar ? '已關閉一人多角色。' : '已開啟一人多角色。')
-    }
-
     if(action === 'share'){
         if(item.kind !== 'archived') return detailOf(pollId, '只有已結束的投票才能公開分享。')
         await interaction.channel.send({
@@ -521,6 +526,44 @@ export const handleAdminEditSubmit = async (interaction, pollId, fields) => {
 //它在模組載入時就會求值，擺在函式宣告之前的話，const 還在 TDZ，
 //會直接丟 ReferenceError: Cannot access 'x' before initialization，
 //而且是在 loader 載入指令/事件的當下爆掉 —— 整組斜線指令都會註冊不上。
+
+/////////////////////////// 快速投票 ///////////////////////////
+
+//點顏色。同一個顏色再按一次就是取消 —— 語音現場常常按錯，
+//沒有取消的話只能重開一場。
+export const handleQuickVote = async (interaction, {pollId, entryId}) => {
+    const optionKey = entryId
+    const userId = interaction.user.id
+
+    const poll = await getPoll(pollId)
+    if(!poll) return {content: '這場投票已經結束了。'}
+    if(poll.status !== 'open') return {content: '這場投票已經結束了。'}
+    if(!poll.options.some((option) => option.key === optionKey)) return null
+
+    const current = getEntries(poll, userId)[0]
+    const cancel = Boolean(current && current.options.includes(optionKey))
+
+    const updated = await castVote(pollId, userId, {options: cancel ? [] : [optionKey]}, 'e0')
+    return buildQuickMessage(updated || poll)
+}
+
+//只有發起人與管理員能提早結束。
+//回傳錯誤字串或 null —— 權限要在 defer 之前檢查完，
+//因為 deferUpdate 之後就不能再用 ephemeral 回覆拒絕了。
+export const checkQuickEnd = async (interaction, pollId) => {
+    const poll = await getPoll(pollId)
+    if(!poll || poll.status !== 'open') return '這場投票已經結束了。'
+
+    const isAdmin = Boolean(interaction.memberPermissions
+        && interaction.memberPermissions.has(PermissionFlagsBits.Administrator))
+
+    if(poll.createdBy !== interaction.user.id && !isAdmin){
+        return '只有發起人或管理員可以結束這場投票。'
+    }
+
+    return null
+}
+
 export default {
     createAndPublish,
     publishPending,
@@ -534,4 +577,6 @@ export default {
     applyPollEdit,
     handleAdminAction,
     handleAdminEditSubmit,
+    handleQuickVote,
+    checkQuickEnd,
 }

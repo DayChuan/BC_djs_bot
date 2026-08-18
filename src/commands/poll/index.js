@@ -127,6 +127,20 @@ export const action = async(ctx) => {
         closeAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
     }
 
+    //一人多角色的意義是「同一個人用不同身分報名」，沒有身分表就沒有意義：
+    //面板會出現一堆分不出誰是誰的「第 N 筆」，結算名單也無從分組。
+    //所以直接擋在建立階段，而不是預設關掉 —— 讓下指令的人當場知道。
+    const multiChar = ctx.options.getBoolean('multi_char') || false
+    if(multiChar && !ctx.options.getString('identity')){
+        await reject(
+            ctx,
+            '要開啟「一人多角色」必須同時選擇 `identity`（身分群組）。
+' +
+            '沒有身分可以區分的話，同一個人的多筆登記在結算名單上分不出誰是誰。'
+        )
+        return
+    }
+
     //沒填就是允許查看。getBoolean 沒填時回 null，不能直接當 false 用。
     const peekOption = ctx.options.getBoolean('peek')
     const peek = peekOption === null ? true : peekOption
@@ -144,7 +158,7 @@ export const action = async(ctx) => {
         options,
         multi: ctx.options.getBoolean('multi') || false,
         identityGroup: ctx.options.getString('identity') || null,
-        multiChar: ctx.options.getBoolean('multi_char') || false,
+        multiChar,
         peek,
         weekly: weeklyConfig,
         createdBy: ctx.user.id,
@@ -168,7 +182,7 @@ export const action = async(ctx) => {
             `${WEEKDAYS[weeklyConfig.closeDay].name} ${weeklyConfig.closeTime} 結算（台北時間）。`
         )
     }
-    if(ctx.options.getBoolean('multi_char')){
+    if(multiChar){
         lines.push('已開啟一人多角色：投票者可以在面板上按「新增角色」登記第二隻以後的角色。')
     }
     lines.push(peek

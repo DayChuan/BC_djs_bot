@@ -23,6 +23,8 @@ export const POLL_KINDS = new Set([
     'add',      //個人面板的「新增角色」
     'del',      //個人面板的「刪除這個角色」
     'sel',      //個人面板的角色切換選單
+    'q',        //快速投票的顏色按鈕(第四段放的是選項 key，不是角色 id)
+    'qend',     //快速投票的「結束投票」
 ])
 
 export const customId = (kind, pollId, entryId) =>
@@ -59,6 +61,11 @@ export const parsePollCustomId = (raw) => {
 //用「不等於 false」而不是「等於 true」來判斷，舊資料沒有這個欄位時才會走到預設值。
 export const canPeek = (poll) => poll.peek !== false
 
+//一人多角色需要身分表才有意義：沒有身分可以區分的話，
+//面板上只會是一堆「第 N 筆」，結算名單也無從分組。
+//建立時已經擋掉了，這裡是為了保護改版前留下的舊資料。
+export const canMultiChar = (poll) => Boolean(poll.multiChar && poll.identityGroup)
+
 //超過長度就截斷並補刪節號。硬塞會被 Discord 整包退回，
 //結果是「結算時什麼都貼不出來」，比少列幾個人嚴重得多。
 const clamp = (text, max) => {
@@ -87,7 +94,7 @@ export const buildPollMessage = (poll) => {
 
     const group = getIdentityGroup(poll.identityGroup)
     if(group) lines.push(`投票時要一併選擇你的${group.label}身分。`)
-    if(poll.multiChar){
+    if(canMultiChar(poll)){
         lines.push(`**一個人可以登記多個角色**（上限 ${MAX_ENTRIES_PER_USER} 個），在面板上按「新增角色」。`)
     }
 
@@ -105,7 +112,7 @@ export const buildPollMessage = (poll) => {
     const buttons = [
         new ButtonBuilder()
             .setCustomId(customId('open', poll.id))
-            .setLabel(poll.multiChar ? '投票 / 管理我的角色' : '投票 / 修改')
+            .setLabel(canMultiChar(poll) ? '投票 / 管理我的角色' : '投票 / 修改')
             .setStyle(ButtonStyle.Primary),
     ]
 
@@ -169,7 +176,7 @@ export const buildMemberPanel = (poll, userId, activeEntryId = null, {draft = nu
 
     embed.setDescription([
         notice,
-        poll.multiChar
+        canMultiChar(poll)
             ? `一次登記一隻角色，選好後按下方按鈕送出。目前有 ${list.length} 隻。`
             : '選好後按下方按鈕送出，截止前可以隨時回來改。',
         isDraft ? '⚠️ 有尚未送出的變更，離開前記得按下方按鈕。' : '',
@@ -236,7 +243,7 @@ export const buildMemberPanel = (poll, userId, activeEntryId = null, {draft = nu
         .setLabel(list.length > 1 ? '刪除這隻角色' : '清除我的登記')
         .setStyle(ButtonStyle.Danger))
 
-    if(poll.multiChar){
+    if(canMultiChar(poll)){
         buttons.push(new ButtonBuilder()
             .setCustomId(customId('add', poll.id))
             .setLabel('新增角色')
@@ -284,7 +291,7 @@ export const buildResultMessage = (poll, {live = false} = {}) => {
     const result = tally(poll)
 
     //一人多角色的投票要同時給「幾個人」與「幾隻角色」，只給其中一個都會誤導
-    const counts = poll.multiChar
+    const counts = canMultiChar(poll)
         ? `${result.voterCount} 人 / ${result.entryCount} 個角色`
         : `${result.voterCount} 人`
 
@@ -330,7 +337,7 @@ export const buildResultMessage = (poll, {live = false} = {}) => {
     if(poll.identityGroup && Object.keys(result.identityTotals).length > 0){
         const summary = Object.entries(result.identityTotals)
             .sort((a, b) => b[1] - a[1])
-            .map(([value, count]) => `${identityLabel(poll.identityGroup, value)}　${count} ${poll.multiChar ? "隻" : "人"}`)
+            .map(([value, count]) => `${identityLabel(poll.identityGroup, value)}　${count} ${canMultiChar(poll) ? "隻" : "人"}`)
             .join('\n')
         embed.addFields({name: '身分統計', value: clamp(summary, MAX_FIELD_VALUE)})
     }
@@ -346,4 +353,83 @@ export const buildClosedMessage = (poll) => {
         .setDescription(`這場投票已於 ${timestamp(poll.closeAt)} 結束，結果公布在下方訊息。`)
 
     return {embeds: [embed], components: []}
+}
+
+/////////////////////////// 快速投票 ///////////////////////////
+
+//Discord 的按鈕只有這四種內建配色，沒有黃色。
+//二選一＝紅藍、三選一＝紅藍灰、四選一＝紅藍灰綠。
+//不掛 emoji，顏色本身就是選項。
+export const QUICK_COLORS = [
+    {key: 'o0', label: '紅', style: ButtonStyle.Danger},
+    {key: 'o1', label: '藍', style: ButtonStyle.Primary},
+    {key: 'o2', label: '灰', style: ButtonStyle.Secondary},
+    {key: 'o3', label: '綠', style: ButtonStyle.Success},
+]
+
+export const QUICK_MIN_CHOICES = 2
+export const QUICK_MAX_CHOICES = QUICK_COLORS.length
+
+//依選項數取出要用的顏色
+export const quickOptions = (count) => QUICK_COLORS
+    .slice(0, Math.max(QUICK_MIN_CHOICES, Math.min(QUICK_MAX_CHOICES, Number(count) || 0)))
+    .map(({key, label}) => ({key, label}))
+
+const styleOf = (key) => {
+    const found = QUICK_COLORS.find((color) => color.key === key)
+    return found ? found.style : ButtonStyle.Secondary
+}
+
+//快速投票的訊息。跟一般投票不同，它是公開即時更新的 ——
+//語音頻道現場要一眼看到目前比數，藏起來就失去意義了。
+export const buildQuickMessage = (poll, {closed = false} = {}) => {
+    const result = tally(poll)
+
+    const lines = poll.options.map((option) => {
+        const stat = result.options.find((item) => item.key === option.key)
+        const count = stat ? stat.count : 0
+        const percent = stat ? stat.percent : 0
+        return `**${option.label}**　${percentBar(percent)}　${count} 票（${percent}%）`
+    })
+
+    const embed = new EmbedBuilder()
+        .setColor(closed ? COLOR_CLOSED : COLOR_OPEN)
+        .setTitle(`${closed ? '📊' : '⚡'} ${clamp(poll.title, MAX_FIELD_NAME)}${closed ? '（已結束）' : ''}`)
+        .setDescription(lines.join('\n'))
+        .setFooter({
+            text: closed
+                ? `共 ${result.voterCount} 人投票`
+                : `目前 ${result.voterCount} 人投票 · 再按一次同一個顏色可以取消`,
+        })
+
+    if(closed){
+        const ranked = [...result.options].sort((a, b) => b.count - a.count)
+        const top = ranked[0]
+        if(top && top.count > 0){
+            const tied = ranked.filter((option) => option.count === top.count)
+            embed.addFields({
+                name: '結果',
+                value: tied.length > 1
+                    ? `平手：${tied.map((option) => option.label).join('、')}　各 ${top.count} 票`
+                    : `**${top.label}** 勝出　${top.count} 票（${top.percent}%）`,
+            })
+        }
+        return {embeds: [embed], components: []}
+    }
+
+    const colorRow = new ActionRowBuilder().addComponents(
+        poll.options.map((option) => new ButtonBuilder()
+            .setCustomId(customId('q', poll.id, option.key))
+            .setLabel(option.label)
+            .setStyle(styleOf(option.key)))
+    )
+
+    const endRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(customId('qend', poll.id))
+            .setLabel('結束投票')
+            .setStyle(ButtonStyle.Secondary)
+    )
+
+    return {embeds: [embed], components: [colorRow, endRow]}
 }

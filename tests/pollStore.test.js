@@ -406,3 +406,48 @@ describe('編輯某個角色不會動到其他角色', () => {
         expect(result.voterCount).toBe(1)
     })
 })
+
+describe('快速投票的資料形狀', () => {
+    const quick = () => ({
+        type: 'quick',
+        title: '要打哪隻王',
+        multi: false,
+        multiChar: false,
+        identityGroup: null,
+        options: [
+            {key: 'o0', label: '紅'},
+            {key: 'o1', label: '藍'},
+        ],
+        votes: {},
+    })
+
+    it('單選：換一個顏色就是換票，不會累加', () => {
+        const poll = quick()
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.applyVote(poll, 'u1', {options: ['o1']}, 'e0')
+
+        expect(poll.votes.u1).toEqual([{entryId: 'e0', options: ['o1'], identity: null}])
+    })
+
+    it('清空選項就是取消投票，分母跟著少一', () => {
+        const poll = quick()
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.applyVote(poll, 'u2', {options: ['o1']}, 'e0')
+        store.applyVote(poll, 'u1', {options: []}, 'e0')
+
+        const result = store.tally(poll)
+        expect(result.voterCount).toBe(1)
+        expect(result.options[1].percent).toBe(100)
+    })
+
+    it('百分比以投票人數為分母', () => {
+        const poll = quick()
+        store.applyVote(poll, 'u1', {options: ['o0']}, 'e0')
+        store.applyVote(poll, 'u2', {options: ['o0']}, 'e0')
+        store.applyVote(poll, 'u3', {options: ['o1']}, 'e0')
+
+        const result = store.tally(poll)
+        expect(result.options[0]).toMatchObject({count: 2, percent: 66.7})
+        expect(result.options[1]).toMatchObject({count: 1, percent: 33.3})
+    })
+})

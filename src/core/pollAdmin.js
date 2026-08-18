@@ -133,7 +133,7 @@ export const buildAdminDetail = (item, {notice = ''} = {}) => {
             {name: '狀態', value: kindLabel(item), inline: true},
             {name: '時間', value: itemTiming(item), inline: true},
             {name: '重複', value: weeklyText(poll.weekly), inline: true},
-            {name: '一人多角色', value: poll.multiChar ? '開啟' : '關閉', inline: true},
+            {name: '一人多角色', value: poll.multiChar && poll.identityGroup ? '開啟' : '關閉', inline: true},
             {name: '中途查看', value: poll.peek === false ? '僅管理員' : '所有人', inline: true},
             {name: '選項', value: poll.options.map((option) => option.label).join('、') || '—'},
             {name: 'id', value: `\`${poll.id}\``, inline: true},
@@ -149,8 +149,6 @@ export const buildAdminDetail = (item, {notice = ''} = {}) => {
                 .setLabel('編輯').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId(adminId('close', poll.id))
                 .setLabel('提早結算').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId(adminId('mchar', poll.id))
-                .setLabel(poll.multiChar ? '關閉多角色' : '開啟多角色').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(adminId('cancel', poll.id))
                 .setLabel('取消投票').setStyle(ButtonStyle.Danger),
         )
@@ -161,8 +159,6 @@ export const buildAdminDetail = (item, {notice = ''} = {}) => {
                 .setLabel('立即發布').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId(adminId('edit', poll.id))
                 .setLabel('編輯排程').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId(adminId('mchar', poll.id))
-                .setLabel(poll.multiChar ? '關閉多角色' : '開啟多角色').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(adminId('cancel', poll.id))
                 .setLabel('刪除排程').setStyle(ButtonStyle.Danger),
         )
