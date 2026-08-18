@@ -297,21 +297,6 @@ export const resolveCommandPoll = async (channelId, pollId) => {
     return {poll: polls[0]}
 }
 
-export default {
-    createAndPublish,
-    publishPending,
-    closePoll,
-    restorePolls,
-    handlePollAction,
-    peekPoll,
-    findOpenPollsInChannel,
-    resolveCommandPoll,
-    cancelPoll,
-    applyPollEdit,
-    handleAdminAction,
-    handleAdminEditSubmit,
-}
-
 /////////////////////////// 管理面板 ///////////////////////////
 
 //取消一場投票：不結算、不公布結果，但仍然歸檔留痕跡。
@@ -478,4 +463,23 @@ export const handleAdminEditSubmit = async (interaction, pollId, fields) => {
 
     const updated = await findAdminItem(pollId)
     return buildAdminDetail(updated, {notice: '已更新。'})
+}
+
+//這個物件必須放在檔案最後。
+//它在模組載入時就會求值，擺在函式宣告之前的話，const 還在 TDZ，
+//會直接丟 ReferenceError: Cannot access 'x' before initialization，
+//而且是在 loader 載入指令/事件的當下爆掉 —— 整組斜線指令都會註冊不上。
+export default {
+    createAndPublish,
+    publishPending,
+    closePoll,
+    restorePolls,
+    handlePollAction,
+    peekPoll,
+    findOpenPollsInChannel,
+    resolveCommandPoll,
+    cancelPoll,
+    applyPollEdit,
+    handleAdminAction,
+    handleAdminEditSubmit,
 }

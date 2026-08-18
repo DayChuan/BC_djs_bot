@@ -160,19 +160,6 @@ export const scheduleAt = (key, when, task) => {
     return key
 }
 
-export default {
-    TIMEZONE,
-    scheduleCron,
-    scheduleAt,
-    cancel,
-    cancelAll,
-    has,
-    keys,
-    weeklyCron,
-    nextWeeklyDate,
-    chunkDelay,
-}
-
 //把「YYYY-MM-DD HH:mm(台北時間)」轉成 Date。給管理面板的編輯視窗用。
 //不合法時回 null 而不是拋錯 —— 這是使用者手打的內容，錯了要給提示不是崩潰。
 export const parseTaipeiDateTime = (text) => {
@@ -202,4 +189,21 @@ export const formatTaipeiDateTime = (iso) => {
     const pad = (n) => String(n).padStart(2, '0')
     return `${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())} ` +
         `${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}`
+}
+
+//放在檔案最後：這個物件在模組載入時就求值，擺在函式宣告之前的話
+//const 還在 TDZ，會丟 ReferenceError。
+export default {
+    TIMEZONE,
+    scheduleCron,
+    scheduleAt,
+    cancel,
+    cancelAll,
+    has,
+    keys,
+    weeklyCron,
+    nextWeeklyDate,
+    chunkDelay,
+    parseTaipeiDateTime,
+    formatTaipeiDateTime,
 }

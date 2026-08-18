@@ -372,3 +372,14 @@ describe('handlePollAction（面板操作）', () => {
         expect(reply.content).toContain('已經截止')
     })
 })
+
+describe('模組載入', () => {
+    //2026-08-18 的實際事故：export default 擺在函式宣告之前，
+    //模組載入時 const 還在 TDZ，直接 ReferenceError，
+    //而且是在 loader 載入指令與事件的當下爆掉 —— 整組斜線指令都註冊不上。
+    it('default export 的每個成員在載入時都取得到', () => {
+        for(const [name, value] of Object.entries(service.default)){
+            expect(typeof value, `default export 的 ${name}`).toBe('function')
+        }
+    })
+})

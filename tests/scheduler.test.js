@@ -192,3 +192,11 @@ describe('parseTaipeiDateTime / formatTaipeiDateTime', () => {
         expect(formatTaipeiDateTime(parseTaipeiDateTime(text).toISOString())).toBe(text)
     })
 })
+
+describe('模組載入', () => {
+    it('default export 的每個成員在載入時都取得到', () => {
+        for(const [name, value] of Object.entries(scheduler)){
+            expect(value, `default export 的 ${name}`).toBeDefined()
+        }
+    })
+})
