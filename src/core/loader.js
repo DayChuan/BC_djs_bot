@@ -41,6 +41,8 @@ export const loadCommands = async() => {
     }
     //////////////////////////////////////////////////
     appStroe.commandActionMap = actions
+    //供 /help 列出指令清單用
+    appStroe.commandList = commands
 
     console.log(appStroe.commandActionMap)
 }

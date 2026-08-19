@@ -4,16 +4,22 @@
 問題清單：[ISSUES.md](./ISSUES.md)（僅作為既有問題的參考索引，不再是計畫主軸）
 jail 建置步驟：[JAIL-SETUP.md](./JAIL-SETUP.md)
 
-## 現況
+## 現況（2026-08-18）
 
-- 正式站 bot 與測試 bot 都已連續運行超過兩天且穩定（2026-08-17 確認）。**不再做觀察期，掛掉時再撈 log 給我判斷。**
-- 錯誤攔截與檔案 log（`src/core/logger.js` + `main.js` 的 process / client 層級 handler）已實作完成並進版控，尚未在測試 jail 完成驗收。
-- 原本以「查崩潰原因」為主軸的階段計畫已作廢。
+- **投票系統已全部完成並部署到正式站，運行正常。** 涵蓋 `/poll`、`/poll_admin`、
+  `/poll_close`、`/poll_peek`、`/quickpoll`。
+- 測試 jail 與 git 同步管線（Phase T）已就緒；錯誤攔截與檔案 log 已上線。
+- **正式站的部署方式與早期記載不同**：正式 jail 其實是 git clone（branch `main`，
+  remote 同一個 repo），部署就是 jail 內 `git pull` + `yarn install`，
+  **不是手動複製**；而且**已經在跑 pm2**，不是 `yarn dev`。
+- 正式站與測試站都不做觀察期，掛掉時撈 log 判斷。
 
 ## 目標
 
-1. **在測試環境修掉既有問題**：先拔掉 Vue/Pinia，合併重複的 Role 對照表。
-2. **加四個新功能**：語音暫時靜音、每週投票、每日日文分享、帳號管理指令。
+1. ~~**在測試環境修掉既有問題**：先拔掉 Vue/Pinia，合併重複的 Role 對照表。~~
+   Role 對照表已在環境設定重構時合併；Vue/Pinia 未拔（Phase 1-A）。
+2. **加四個新功能**：語音暫時靜音、~~每週投票~~（已完成，見 Phase 4）、
+   每日日文分享、帳號管理指令。
 
 ## 核心原則
 
@@ -292,9 +298,9 @@ pm2 restart bc-test --update-env
 - [x] 2a-4 `pollService.closePoll` 改為歸檔
 - [x] 2a-5 `ready` 事件：遷移 → 還原 → 清理
 - [x] 2a-6 測試更新 ＋ `tests/pollArchive.test.js`
-- [ ] 2a-7 jail `yarn test` 通過
-- [ ] 2a-8 實機驗收：舊投票自動遷移、結算後出現在 `archive/`
-- [ ] 2a-9 commit
+- [x] 2a-7 jail `yarn test` 通過
+- [x] 2a-8 實機驗收：舊投票自動遷移、結算後出現在 `archive/`
+- [x] 2a-9 commit
 
 ### 4-B-2b 多角色 ＋ 歷史查詢
 
@@ -317,9 +323,9 @@ pm2 restart bc-test --update-env
 - [x] 2b-5 `/poll` 的 `multi_char` 參數
 - [x] 2b-6 歷史查詢（後併入 `/poll_admin`，獨立指令已刪除）
 - [x] 2b-7 測試更新
-- [ ] 2b-8 jail `yarn test` 通過
-- [ ] 2b-9 實機驗收（見下）
-- [ ] 2b-10 commit
+- [x] 2b-8 jail `yarn test` 通過
+- [x] 2b-9 實機驗收
+- [x] 2b-10 commit
 
 **2b 實機驗收**
 1. `/poll` 不帶 `multi_char` → 公開訊息只有按鈕；點按鈕出現面板，選項可選、可取消
@@ -355,9 +361,9 @@ pm2 restart bc-test --update-env
 - [x] 2c-4 `/poll_admin` 指令與 `interactionCreate` 分派（含 Modal）
 - [x] 2c-5 `scheduler`：台北時間的日期字串解析與格式化
 - [x] 2c-6 測試（`tests/pollAdmin.test.js` 22 個案例 ＋ 時間轉換 6 個）
-- [ ] 2c-7 jail `yarn test` 通過
-- [ ] 2c-8 實機驗收（見下）
-- [ ] 2c-9 commit
+- [x] 2c-7 jail `yarn test` 通過
+- [x] 2c-8 實機驗收
+- [x] 2c-9 commit
 
 **2c 實機驗收**
 1. `/poll_admin` → 列出所有投票，狀態圖示正確
@@ -388,7 +394,7 @@ pm2 restart bc-test --update-env
 - [x] 4-C-2 `/quickpoll` 指令
 - [x] 4-C-3 投票、取消、結束的互動處理
 - [x] 4-C-4 `closePoll` 對快速投票就地結算
-- [ ] 4-C-5 實機驗收
+- [x] 4-C-5 實機驗收（2026-08-18，測試站通過後已部署正式站）
 
 ### 4-B-2d 一人多角色的前置條件
 
@@ -476,15 +482,23 @@ pm2 restart bc-test --update-env
 
 ---
 
-## Phase 7 — 指令部署分離 + pm2
+## Phase 7 — 指令部署分離（pm2 部分已完成）
 
-新增四個指令後，M-01（每次啟動都重打指令註冊 API）的風險比之前更高，該處理了。
+指令已從 3 個增加到 10 個，M-01（每次啟動都重打指令註冊 API）的風險比當初更高。
+
+> **2026-08-18 更正**：7-C 的 pm2 其實**早就在正式站與測試站運行**，
+> 這份文件先前記載為「正式站用 `yarn dev`、Phase 7-C 才改用 pm2」是錯的。
+> 剩下要做的是 7-A、7-B（指令註冊從啟動流程拆出來）與 7-D。
+>
+> 拆開的價值在 2026-08-18 得到印證：`commands/poll/index.js` 出現語法錯誤時，
+> bot 照常連線、`ready` 也正常，只有指令表默默建不起來，畫面上只看得到
+> 「機器人還在啟動中」。註冊獨立成部署步驟後，這種錯會在部署當下就爆出來。
 
 | 子步驟 | 對應 | 內容 |
 |---|---|---|
 | 7-A | M-01 | 新增 `src/scripts/deploy-commands.js` 與 `npm run deploy`；`loadCommands()` 改為只建立 action 對照表，不再呼叫 REST |
 | 7-B | M-01 | 雜湊護欄：deploy 時把 payload 的 SHA-256 存進 `.commands-hash.json`（加入 `.gitignore`），內容未變就跳過 PUT |
-| 7-C | M-08、E-01 | jail 內以 pm2 執行，`ecosystem.config.cjs` 指定絕對 `cwd`（避免 M-05 的 CWD 問題）、`exp_backoff_restart_delay`、`max_restarts`，並設定 jail 開機自啟 |
+| ~~7-C~~ | M-08、E-01 | ~~jail 內以 pm2 執行~~ **已完成**：兩個 jail 都已用 pm2 管理 |
 | 7-D | C-07 | pm2 上線後，`uncaughtException` 由「記錄後繼續跑」改為「記錄後 exit」，交給 pm2 重啟 |
 
 **驗收**：
@@ -496,7 +510,7 @@ pm2 restart bc-test --update-env
 **Progress**
 - [ ] 7-A deploy-commands 腳本
 - [ ] 7-B 雜湊護欄
-- [ ] 7-C pm2 設定與開機自啟
+- [x] 7-C pm2 設定與開機自啟（早已完成，文件先前記載錯誤）
 - [ ] 7-D uncaughtException 改為 exit
 - [ ] 7-E 驗收
 - [ ] 7-F commit
@@ -565,3 +579,89 @@ pm2 restart bc-test --update-env
 **唯一的例外**：每個模組保留一個「default export 的成員在載入時都取得到」的檢查。
 2026-08-18 發生過 `export default` 擺在函式宣告之前導致 TDZ ReferenceError，
 bot 看起來有上線但整組斜線指令都註冊不上 —— 這種錯實機很難一眼看出原因。
+
+---
+
+## 部署方式（2026-08-18 實測確認）
+
+先前文件記載正式站是「手動複製部署、用 `yarn dev` 啟動」，**兩項都是錯的**。
+實際狀況：
+
+| | 測試 jail `DiscordBot_test` | 正式 jail `DiscordBot` |
+|---|---|---|
+| 目錄 | `/root/BC_djs_bot_test` | `/root/BC_djs_bot` |
+| 來源 | git clone，branch `test` | git clone，branch `main`，同一個 repo |
+| 抓檔 | `sh /root/update.sh`（fetch + `reset --hard`） | `git pull origin main` |
+| 執行 | pm2（`bc-test`） | pm2 |
+
+**正式站部署步驟**
+
+```sh
+# 1. NAS 端：把驗證過的 test 快轉到 main
+git push origin test:main
+
+# 2. 正式 jail
+cd /root/BC_djs_bot
+git log -1 --oneline        # 記下目前的 commit，回滾要用
+git pull origin main
+yarn install                # 相依有變動時必須跑
+pm2 restart <正式站的程序名>
+tail -30 logs/$(date +%Y-%m-%d).log   # 確認有 Ready! 且沒有 unhandledRejection
+```
+
+**回滾**
+
+```sh
+cd /root/BC_djs_bot
+git reset --hard <先前的 commit>
+yarn install
+pm2 restart <正式站的程序名>
+```
+
+`.env`、`data/`、`yarn.lock`、`logs/` 都不在版控，git 操作不會動到它們，
+所以回滾很乾淨。唯一要注意的是：若回滾前已有人用新指令發過投票，
+`data/polls/` 會留下沒人管的檔案 —— 不會出錯，但那些投票不會結算。
+
+---
+
+## Phase 9 — ephemeral 清理與 `/help`（2026-08-19）
+
+**問題**：面板類的按鈕每按一次就開一則新的 ephemeral 訊息，同一個人畫面上會愈疊愈多；
+另外 `/ask`、`/test` 是早期練習用的指令，留著只是雜訊（`/ask` 還是 C-01 的當事人）。
+
+| 子步驟 | 內容 |
+|---|---|
+| 9-A | `src/core/ephemeralTracker.js`：每人每伺服器只留最新一則 ephemeral，開新的之前刪舊的 |
+| 9-B | `interactionCreate` 的四個「開新面板」路徑接上 tracker，就地更新的路徑改為續期 token |
+| 9-C | 移除 `/ask`、`/test` |
+| 9-D | 新增 `/help`：依成員權限過濾，只列出他用得到的指令（含子指令） |
+| 9-E | `/poll` 由 `ManageMessages` 放寬為 `SendMessages`：發起投票不改動別人的東西，管理動作仍限管理員 |
+
+**設計重點**
+
+- 刪別次互動的訊息靠該次 interaction 自己的 webhook token，**壽命 15 分鐘**；
+  tracker 只保留 14 分鐘，過期的直接丟棄不試，省一次注定失敗的 API 往返。
+- 刪除失敗（10008 訊息已不存在、50027 token 失效、使用者自己按 Dismiss）一律吞掉只記 log。
+  這段程式在使用者等回覆的路徑上，不能因為清垃圾失敗就中斷本次互動。
+- `refreshEphemeral()` 只更新既有項目：沒被登記過的 ephemeral（例如 `/poll_admin` 的面板）
+  不會因為使用者按了別的按鈕就被刪掉。
+- `/help` 的權限判斷直接讀各指令的 `default_member_permissions`，不另外維護一份清單 ——
+  多一份就會有兩邊不同步的一天。判斷交給 `PermissionsBitField.has()`，管理員自動視同全部權限。
+- 排版與過濾放在 `src/core/helpText.js`（不碰 discord.js）才測得到，指令檔只負責接線。
+
+**驗收**
+1. 連按兩次身分組面板按鈕 → 舊的那則消失，只剩最新一則
+2. 面板上操作選單（就地更新）→ 不會被誤刪
+3. 一般成員 `/help` 只看到 `/help`、`/sip_sip`、`/quickpoll`、`/poll`；管理員看到全部
+4. 指令清單裡不再有 `/ask`、`/test`
+
+**Progress**
+- [x] 9-A `ephemeralTracker`
+- [x] 9-B `interactionCreate` 接線
+- [x] 9-C 移除 `/ask`、`/test`
+- [x] 9-D `/help` ＋ `helpText`
+- [x] 9-E `/poll` 權限放寬
+- [x] 9-F 測試（`tests/ephemeralTracker.test.js`、`tests/helpText.test.js`）
+- [ ] 9-G jail `yarn test` 通過
+- [ ] 9-H 實機驗收
+- [ ] 9-I commit

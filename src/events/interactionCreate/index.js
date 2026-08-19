@@ -5,6 +5,7 @@ import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePan
 import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
+import {refreshEphemeral, trackEphemeral} from '@/core/ephemeralTracker'
 import {
     checkQuickEnd,
     closePoll,
@@ -63,6 +64,7 @@ const handleChatInputCommand = async(interaction) => {
 //先 defer 是因為後面要抓成員與身分組，不一定來得及在 3 秒內完成。
 const handlePanelOpen = async(interaction) => {
     await interaction.deferReply({flags: MessageFlags.Ephemeral})
+    await trackEphemeral(interaction)
     const member = await interaction.guild.members.fetch(interaction.user.id)
     await interaction.editReply(await buildMemberPanel(interaction.guild, member))
 }
@@ -70,6 +72,7 @@ const handlePanelOpen = async(interaction) => {
 //送出選單：把身分組對齊勾選結果，然後就地更新那則 ephemeral 訊息
 const handlePanelSelect = async(interaction) => {
     await interaction.deferUpdate()
+    refreshEphemeral(interaction)
 
     const member = await interaction.guild.members.fetch(interaction.user.id)
     const {added, removed} = await syncRoles(member, interaction.values, getRoleIds())
@@ -107,8 +110,14 @@ const handlePollAction = async(interaction, parsed) => {
     const fromPanel = Boolean(interaction.message && interaction.message.flags
         && interaction.message.flags.has(MessageFlags.Ephemeral))
 
-    if(fromPanel) await interaction.deferUpdate()
-    else await interaction.deferReply({flags: MessageFlags.Ephemeral})
+    if(fromPanel){
+        await interaction.deferUpdate()
+        refreshEphemeral(interaction)
+    }
+    else{
+        await interaction.deferReply({flags: MessageFlags.Ephemeral})
+        await trackEphemeral(interaction)
+    }
 
     //回 null 代表「只更新草稿、畫面不用動」。
     //選項每點一下就重繪面板的話，使用者每一下都要等一次 Discord 往返。
@@ -161,6 +170,7 @@ const handleQuick = async(interaction, parsed) => {
 //所以這裡不必再檢查權限；回覆同樣是 ephemeral，不會洗版也不會影響其他人。
 const handlePollPeek = async(interaction, parsed) => {
     await interaction.deferReply({flags: MessageFlags.Ephemeral})
+    await trackEphemeral(interaction)
     await interaction.editReply(await peekPoll(parsed.pollId))
 }
 
@@ -179,6 +189,7 @@ export const action = async(interaction) => {
             const parsed = parseAdminCustomId(interaction.customId)
             if(parsed && parsed.action === 'save'){
                 await interaction.deferReply({flags: MessageFlags.Ephemeral})
+                await trackEphemeral(interaction)
                 const fields = Object.fromEntries(
                     ['title', 'description', 'closeAt', 'weeklyOpen', 'weeklyClose']
                         .map((id) => [id, interaction.fields.getTextInputValue(id)])

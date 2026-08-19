@@ -21,8 +21,9 @@ const MAX_HOURS = 24 * 30
 export const command = new SlashCommandBuilder()
     .setName('poll')
     .setDescription('在目前頻道發起一場投票')
-    //一般成員的指令清單裡不會出現這個指令
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    //開放給所有能發言的成員(2026-08-19 調整，原本限 ManageMessages)。
+    //發起投票本身不會改動別人的東西，結算與管理才是管理員的事。
+    .setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)
     .addStringOption((option) => option
         .setName('title')
         .setDescription('投票名稱')

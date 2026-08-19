@@ -39,8 +39,8 @@
 
 ## P0 — 會讓 bot 掛掉
 
-### C-01　`/ask` 指令必定崩潰
-- 位置：`src/commands/ask/index.js:19`
+### ~~C-01　`/ask` 指令必定崩潰~~（2026-08-19 已解決：指令整個移除）
+- 位置：`src/commands/ask/index.js:19`（檔案已刪除）
 - 現況：`await ctx.reply({question})`
 - 問題：`reply()` 需要字串或 `{content, embeds, ...}`。`{question: "..."}` 不含 `content`，Discord 回 `50006 Cannot send an empty message`。`src/events/interactionCreate/index.js` 沒有 try/catch，rejection 冒到頂層 → 行程終止。
 - 附帶：`question` 為 `setRequired(true)`，永遠不為 null，第 22 行的 `else` 分支是死碼；第 17 行的 `row` 建了但沒用。
@@ -164,7 +164,6 @@
 | `src/events/Message_listening/index.js:1` | `GatewayIntentBits` |
 | `src/events/Role_Add_Emoji/index.js:1` | `Client` |
 | `src/events/Role_Remove_Emoji/index.js:1` | `Client` |
-| `src/commands/ask/index.js:1` | `ActionRow`、`Component`（`row` 變數亦未使用） |
 | `src/store/app.js:1` | `GatewayIntentBits` |
 
 ### M-07　殘留的除錯輸出與死碼
