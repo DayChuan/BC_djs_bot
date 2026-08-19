@@ -1,5 +1,16 @@
-import {describe, it, expect, beforeEach} from 'vitest'
+import {describe, it, expect, beforeEach, vi} from 'vitest'
 import {refreshEphemeral, resetEphemeralTracker, trackEphemeral} from '@/core/ephemeralTracker'
+
+//把 logger 換成假的。真正的 logger 會開檔與串流，在測試 jail 裡會讓 vitest
+//卡住跑不完 —— 症狀跟 fileParallelism 那個坑一樣：沒有錯誤訊息，就是不結束。
+//凡是(直接或間接)載到 @/core/logger 的測試檔都要加這段。
+vi.mock('@/core/logger', () => ({
+    default: {
+        warn: vi.fn(),
+        info: vi.fn(),
+        error: vi.fn(),
+    },
+}))
 
 //這個模組不碰 discord.js，只用假的 interaction 物件驗行為。
 const makeInteraction = (id, {userId = 'U1', guildId = 'G1', fail = false} = {}) => ({

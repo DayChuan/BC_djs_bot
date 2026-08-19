@@ -117,7 +117,7 @@ export const buildPollMessage = (poll) => {
     ]
 
     //允許中途查看時才掛按鈕。不允許的話按鈕根本不存在，
-    //比「掛上去但點了說沒權限」乾淨 —— 管理員仍可用 /poll_peek 查看。
+    //比「掛上去但點了說沒權限」乾淨 —— 管理員仍可用 /poll_admin 查看。
     if(canPeek(poll)){
         buttons.push(new ButtonBuilder()
             .setCustomId(customId('peek', poll.id))

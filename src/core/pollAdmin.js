@@ -85,6 +85,13 @@ const weeklyText = (weekly) => (weekly
 
 /////////////////////////// 列表畫面 ///////////////////////////
 
+//模板管理是另一個模組的地盤(customId 前綴 ptpl:)，這裡只放一顆入口按鈕。
+//列表有沒有投票都要掛，因為「一場投票都還沒開」正是最需要先去建模板的時候。
+const templateEntryRow = () => new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ptpl:home')
+        .setLabel('📋 模板管理').setStyle(ButtonStyle.Secondary)
+)
+
 export const buildAdminList = (items, {notice = ''} = {}) => {
     const embed = new EmbedBuilder()
         .setColor(COLOR)
@@ -95,7 +102,7 @@ export const buildAdminList = (items, {notice = ''} = {}) => {
             notice,
             '目前沒有任何投票（進行中、排程中、已結束都沒有）。',
         ].filter(Boolean).join('\n\n'))
-        return {embeds: [embed], components: []}
+        return {embeds: [embed], components: [templateEntryRow()]}
     }
 
     const shown = items.slice(0, MAX_SELECT_OPTIONS)
@@ -117,7 +124,10 @@ export const buildAdminList = (items, {notice = ''} = {}) => {
             value: item.poll.id,
         })))
 
-    return {embeds: [embed], components: [new ActionRowBuilder().addComponents(select)]}
+    return {
+        embeds: [embed],
+        components: [new ActionRowBuilder().addComponents(select), templateEntryRow()],
+    }
 }
 
 /////////////////////////// 單場詳情 ///////////////////////////

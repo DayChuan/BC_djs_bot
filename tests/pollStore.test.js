@@ -1,8 +1,18 @@
-import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import * as store from '@/core/pollStore'
+
+//把 logger 換成假的。真正的 logger 會開檔與串流，在測試 jail 裡會讓 vitest
+//卡住跑不完 —— 症狀跟 fileParallelism 那個坑一樣：沒有錯誤訊息，就是不結束。
+vi.mock('@/core/logger', () => ({
+    default: {
+        warn: vi.fn(),
+        info: vi.fn(),
+        error: vi.fn(),
+    },
+}))
 
 //pollStore 的檔案路徑是「用到時才解析」的，所以這裡不需要重新載入模組，
 //只要在每個案例前換掉環境變數並清掉快取就好。

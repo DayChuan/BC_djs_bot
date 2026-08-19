@@ -65,6 +65,7 @@ describe('測試檔不得碰到 discord.js', () => {
         '@/core/pollService',
         '@/core/pollRender',
         '@/core/pollAdmin',
+        '@/core/pollTemplateAdmin',
         '@/core/rolePanel',
     ]
 

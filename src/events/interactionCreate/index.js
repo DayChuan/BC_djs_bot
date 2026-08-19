@@ -16,6 +16,14 @@ import {
     peekPoll,
 } from '@/core/pollService'
 import {buildEditModal, findAdminItem, parseAdminCustomId} from '@/core/pollAdmin'
+import {getTemplate} from '@/core/pollTemplate'
+import {
+    TEMPLATE_MODAL_FIELDS,
+    buildTemplateModal,
+    handleTemplateAction,
+    handleTemplateSubmit,
+    parseTemplateCustomId,
+} from '@/core/pollTemplateAdmin'
 
 export const event = {
     name: Events.InteractionCreate
@@ -143,6 +151,28 @@ const handleAdmin = async(interaction, parsed) => {
     await interaction.editReply(await handleAdminAction(interaction, parsed))
 }
 
+//模板管理。跟投票管理一樣就地更新同一則 ephemeral 訊息，
+//所以從 /poll_admin 按進來、改完再按「回投票管理」，全程只有一則訊息。
+const handleTemplate = async(interaction, parsed) => {
+    //開 Modal 必須直接對 interaction 呼叫，不能先 defer
+    if(parsed.action === 'new'){
+        await interaction.showModal(buildTemplateModal())
+        return
+    }
+    if(parsed.action === 'edit'){
+        const template = await getTemplate(parsed.id)
+        if(!template){
+            await interaction.reply({content: '那個模板已經不存在了。', flags: MessageFlags.Ephemeral})
+            return
+        }
+        await interaction.showModal(buildTemplateModal(template))
+        return
+    }
+
+    await interaction.deferUpdate()
+    await interaction.editReply(await handleTemplateAction(interaction, parsed))
+}
+
 //快速投票：訊息本身就是公開即時更新的，所以直接就地改那則訊息，
 //不像一般投票要另開個人面板。
 const handleQuick = async(interaction, parsed) => {
@@ -186,6 +216,19 @@ export const action = async(interaction) => {
         }
         //編輯視窗送出。Modal 沒有原本那則面板可以更新，所以另開一則 ephemeral 回覆。
         if(interaction.isModalSubmit()){
+            //模板的 Modal 欄位跟投票的完全不同，所以先依前綴分流，
+            //不能共用下面那份寫死的欄位名單。
+            const tpl = parseTemplateCustomId(interaction.customId)
+            if(tpl && tpl.action === 'save'){
+                await interaction.deferReply({flags: MessageFlags.Ephemeral})
+                await trackEphemeral(interaction)
+                const fields = Object.fromEntries(
+                    TEMPLATE_MODAL_FIELDS.map((id) => [id, interaction.fields.getTextInputValue(id)])
+                )
+                await interaction.editReply(await handleTemplateSubmit(interaction, tpl.id, fields))
+                return
+            }
+
             const parsed = parseAdminCustomId(interaction.customId)
             if(parsed && parsed.action === 'save'){
                 await interaction.deferReply({flags: MessageFlags.Ephemeral})
@@ -199,6 +242,12 @@ export const action = async(interaction) => {
             }
         }
         if(interaction.isButton() || interaction.isStringSelectMenu()){
+            const tpl = parseTemplateCustomId(interaction.customId)
+            if(tpl){
+                await handleTemplate(interaction, tpl)
+                return
+            }
+
             const admin = parseAdminCustomId(interaction.customId)
             if(admin){
                 await handleAdmin(interaction, admin)

@@ -8,11 +8,11 @@ import {
     getEntries,
     getPoll,
     listActivePolls,
-    listOpenPolls,
     removeVoteEntry,
     updatePoll,
 } from '@/core/pollStore'
 import {archivePoll} from '@/core/pollArchive'
+import {addDays, applyDates, basesOf} from '@/core/pollTemplate'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
 import {PermissionFlagsBits} from 'discord.js'
 import {
@@ -120,6 +120,24 @@ const scheduleNextRound = async (client, poll) => {
     //開了一人多角色的每週投票，下一週會變回單角色，而且不公開中途結果的設定
     //也會被還原成公開。白名單只要新增欄位就會漏，所以改成反過來做。
     const {id, messageId, closeAt, archivedAt, archivedBy, result, ...carried} = poll
+
+    //有標日期的投票，下一輪整組往後推一週：起日 +7 天，選項的日期跟著重算。
+    //重算的依據是 option.base(沒有日期的原始文字)，不是 label ——
+    //拿 label 去接第二次日期會變成「星期二(8/18)(8/25)」。
+    if(carried.dateStart){
+        const nextStart = addDays(carried.dateStart, 7)
+        const dated = nextStart ? applyDates(basesOf(carried.options), nextStart) : null
+
+        //推不動就原封不動帶過去。日期算錯不該讓整個下一輪消失 ——
+        //標籤舊了看得出來，投票沒排到下一輪則是沒有人會發現的那種故障。
+        if(dated){
+            carried.dateStart = nextStart
+            carried.options = dated
+        }
+        else{
+            logger.error(`投票 ${poll.id} 的起日「${carried.dateStart}」無法推進，下一輪沿用原本的選項日期`)
+        }
+    }
 
     const next = await createPoll({
         ...carried,
@@ -319,39 +337,13 @@ export const handlePollAction = async (interaction, {kind, pollId, entryId}, {fr
 
 //回傳可以直接丟給 interaction.editReply() 的內容。
 //查不到或不允許查看時回一段文字，呼叫端不必自己判斷型別。
-//byAdmin 為 true 時略過 peek 設定 —— 管理員用 /poll_peek 永遠看得到。
+//byAdmin 為 true 時略過 peek 設定 —— 管理員從 /poll_admin 進來永遠看得到。
 export const peekPoll = async (pollId, {byAdmin = false} = {}) => {
     const poll = await getPoll(pollId)
     if(!poll) return {content: '這場投票已經結束並清除了。'}
     if(!byAdmin && !canPeek(poll)) return {content: '這場投票不開放中途查看結果。'}
 
     return buildResultMessage(poll, {live: true})
-}
-
-//指令沒指定 id 時，用「這個頻道進行中的投票」來推斷。
-//剛好一場就直接用它，多於一場就要求指定 —— 猜錯會結算到不該結算的那場。
-export const findOpenPollsInChannel = async (channelId) => {
-    const polls = await listOpenPolls()
-    return polls.filter((poll) => poll.channelId === channelId)
-}
-
-///poll_close 與 /poll_peek 共用的目標解析。
-//回傳 {poll} 或 {error}，呼叫端只要判斷有沒有 error 就好。
-export const resolveCommandPoll = async (channelId, pollId) => {
-    if(pollId){
-        const poll = await getPoll(pollId)
-        if(!poll) return {error: `找不到 id 為 \`${pollId}\` 的投票，它可能已經結算並清除了。`}
-        return {poll}
-    }
-
-    const polls = await findOpenPollsInChannel(channelId)
-    if(polls.length === 0) return {error: '這個頻道目前沒有進行中的投票。'}
-    if(polls.length > 1){
-        const list = polls.map((poll) => `　\`${poll.id}\`　${poll.title}`).join('\n')
-        return {error: `這個頻道有 ${polls.length} 場進行中的投票，請用 \`id\` 參數指定：\n${list}`}
-    }
-
-    return {poll: polls[0]}
 }
 
 /////////////////////////// 管理面板 ///////////////////////////
@@ -571,8 +563,6 @@ export default {
     restorePolls,
     handlePollAction,
     peekPoll,
-    findOpenPollsInChannel,
-    resolveCommandPoll,
     cancelPoll,
     applyPollEdit,
     handleAdminAction,

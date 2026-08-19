@@ -26,7 +26,8 @@ export const makePollId = (now = Date.now(), rand = Math.random()) =>
     `p_${now.toString(36)}${Math.floor(rand * 1296).toString(36).padStart(2, '0')}`
 
 //id 會被拿去組檔名，所以一定要驗格式。
-//少了這道關卡，`/poll_close id:../../../etc/passwd` 就能讓 bot 去讀寫任意路徑。
+//少了這道關卡，一個偽造的 customId(例如 `padm:close:../../../etc/passwd`)
+//就能讓 bot 去讀寫任意路徑 —— customId 是從用戶端送回來的，不能信任。
 export const isValidPollId = (id) => /^p_[a-z0-9]{1,40}$/i.test(String(id || ''))
 
 //Discord 的選單一次最多 25 個選項，標籤最多 100 字
