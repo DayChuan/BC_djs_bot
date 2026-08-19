@@ -251,7 +251,15 @@ export const listTemplates = async () => {
         if(template && template.id) templates.push(template)
     }
 
-    return templates.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-Hant'))
+    //刻意不用 localeCompare：中文排序要靠完整的 ICU，
+    //jail 上的 Node 若是 small-icu 會無聲地退回碼點比較，順序跟開發機不一樣。
+    //模板是個位數、名稱由使用者自己取，穩定就夠了，不必追求字典序。
+    return templates.sort((a, b) => {
+        const left = String(a.name)
+        const right = String(b.name)
+        if(left === right) return String(a.id) < String(b.id) ? -1 : 1
+        return left < right ? -1 : 1
+    })
 }
 
 export const saveTemplate = async (template) => {

@@ -320,10 +320,16 @@ describe('模板讀寫', () => {
         expect(await tpl.getTemplate('../evil')).toBeNull()
     })
 
-    it('列表依名稱排序', async () => {
-        await tpl.saveTemplate(sample({id: 't_b', name: '乙'}))
-        await tpl.saveTemplate(sample({id: 't_a', name: '甲'}))
-        expect((await tpl.listTemplates()).map((item) => item.name)).toEqual(['甲', '乙'])
+    it('列表依名稱排序，且不依賴 ICU 的中文定序', async () => {
+        await tpl.saveTemplate(sample({id: 't_b', name: 'B 週常'}))
+        await tpl.saveTemplate(sample({id: 't_a', name: 'A 週常'}))
+        expect((await tpl.listTemplates()).map((item) => item.name)).toEqual(['A 週常', 'B 週常'])
+    })
+
+    it('同名的模板用 id 決定先後，順序才不會每次不一樣', async () => {
+        await tpl.saveTemplate(sample({id: 't_b', name: '同名'}))
+        await tpl.saveTemplate(sample({id: 't_a', name: '同名'}))
+        expect((await tpl.listTemplates()).map((item) => item.id)).toEqual(['t_a', 't_b'])
     })
 
     it('刪除後就讀不到了，重複刪除回 false', async () => {
