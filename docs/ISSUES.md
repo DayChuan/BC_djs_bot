@@ -3,6 +3,37 @@
 盤點日期：2026-08-13
 盤點範圍：`src/**`、`package.json`、`vite.config.js`、`.env`（僅鍵名）
 
+> **這是 2026-08-13 的盤點快照，不是主線計畫。** 主線在 `docs/PLAN.md` 的單元總表。
+> 下面各條的內文**維持當初的原文沒有改寫**，現況一律以這張表為準（2026-08-20 核對過原始碼）。
+
+## 結案狀態（2026-08-20）
+
+| 編號 | 現況 | 依據 |
+|---|---|---|
+| C-01 `/ask` 必定崩潰 | ✅ 已解決 | 指令整個移除（`524d720`） |
+| C-02 事件內未 await | ✅ 已解決 | `Message_listening` 全面 await ＋ try/catch；兩個 Role 事件改用 `core/roleGrant.js`（`726e3bd`、`c97ac41`） |
+| C-03 catch 自己爆炸 | ✅ 已解決 | 改用 `roleGrant.js` 的 `notifyAdmin()`，自帶 try/catch |
+| C-04 開機競態 | ✅ 已解決 | `interactionCreate` 第 47-56 行擋掉。**但 `main.js` 的 `loadCommands()` 仍未 await → U01** |
+| C-05 已刪除的指令 | ✅ 已解決 | `interactionCreate` 第 58-66 行 |
+| C-06 缺 `client.on('error')` | ✅ 已解決 | `main.js` 已監聽 error / shardError / shardDisconnect / shardReconnecting / warn |
+| C-07 無行程層級保護 | 🟡 部分 | handler 與檔案 log 都有了；**`uncaughtException` 仍是「記錄後繼續跑」，改為 exit 是 U01** |
+| F-01 partial 未 fetch | ✅ 已解決 | `roleGrant.js` |
+| F-02 未快取成員 | ✅ 已解決 | `roleGrant.js` 改用 `members.fetch()` |
+| F-03 `🏕️` 變體選擇符 | ✅ 已解決 | `config/index.js` 的 `normalizeEmoji()` |
+| F-04 關鍵字順序遮蔽 | ⬜ 未處理 | 判定為刻意設計，不修 |
+| M-01 每次啟動重註冊指令 | ⬜ **U01** | |
+| M-02 store 鍵名拼錯 ＋ Vue/Pinia | ⬜ **U02** | |
+| M-03 Role 對照表重複兩份 | ✅ 已解決 | 合併進 `config/environments/` |
+| M-04 錯誤訊息文字錯誤 | ✅ 已解決 | 隨 M-03 一起 |
+| M-05 相對路徑掃檔依賴 CWD | 🟡 部分 | `logger` / `pollStore` / `selfRoles` 都改用 `import.meta.url` 了；**`loader.js` 仍是相對路徑 → U01** |
+| M-06 未使用的匯入 | 🟡 部分 | 大多隨改版消失；`main.js` 的 `Events`/`Message`、`store/app.js` 的 `GatewayIntentBits` 還在 → U02 |
+| M-07 除錯輸出與死碼 | 🟡 部分 | `loader.js` 第 46 行的 `console.log` 還在 → U01 |
+| M-08 缺自動重啟 | ✅ 已解決 | 兩個 jail 都以 pm2 運行 |
+| E-01 `yarn dev` 無 supervisor | ✅ 已解決 | 同 M-08 |
+| E-02 用 `vite-node` 跑正式站 | ⬜ 不修 | `@/` 別名靠它，換掉要先處理別名。目前沒有 OOM 跡象 |
+| E-03 手動複製部署 | ✅ 已解決 | 兩個 jail 都改為 git clone，見 `docs/DEPLOY.md` |
+| E-04 `.env` 無測試隔離 | ✅ 已解決 | 測試 jail ＋ 測試伺服器 ＋ 各自的 `.env` |
+
 ## 環境
 
 | 項目 | 開發機（本次掃描環境） | 正式站 |
