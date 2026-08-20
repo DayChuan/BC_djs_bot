@@ -46,7 +46,7 @@ git branch -d unit/U01-command-deploy
 sh /root/update.sh
 ```
 
-這支腳本做四件事：`git fetch origin test` → `reset --hard origin/test` → `package.json` 或 `yarn.lock` 有變動才 `yarn install` → `pm2 restart bc-test --update-env`。
+這支腳本做四件事：`git fetch origin test` → `reset --hard origin/test` → `package.json` 或 `yarn.lock` 有變動才 `yarn install` → `pm2 restart discord-bot --update-env`。
 用 `reset --hard` 而不是 `pull`，是因為 jail 端永遠不改檔案，硬對齊遠端才不會因衝突讓 cron 默默卡住。
 
 cron 每天會自動跑一次，需要時直接手動執行同一支腳本。
@@ -54,17 +54,17 @@ cron 每天會自動跑一次，需要時直接手動執行同一支腳本。
 驗證：
 
 ```sh
-cd /root/BC_djs_bot
+cd /root/BC_djs_bot_test
 git log -1 --oneline                      # 確認抓到的是預期的 commit
 yarn test                                 # 單元測試
 tail -30 logs/$(date +%Y-%m-%d).log       # 有 Ready! 且沒有 unhandledRejection
-pm2 logs bc-test --lines 50               # 或看 pm2 這邊
+pm2 logs discord-bot --lines 50           # 或看 pm2 這邊
 ```
 
 **U01 完成後**，指令有增減時要多跑一步（否則 Discord 端看不到新指令）：
 
 ```sh
-cd /root/BC_djs_bot && yarn deploy
+cd /root/BC_djs_bot_test && yarn deploy
 ```
 
 內容沒變會自己印「內容未變、跳過」，所以每次部署都跑也沒關係。
@@ -87,11 +87,9 @@ git log -1 --oneline          # 先記下目前的 commit，回滾要用
 git pull origin main
 yarn install                  # 相依有變動時必須跑
 yarn deploy                   # U01 完成後才有；指令有增減時必跑
-pm2 restart <正式站的程序名>
+pm2 restart bc-djs-bot
 tail -30 logs/$(date +%Y-%m-%d).log
 ```
-
-> 正式站的 pm2 程序名用 `pm2 list` 查。查到之後回報給我，我補進這份文件。
 
 ---
 
@@ -102,7 +100,7 @@ cd /root/BC_djs_bot
 git reset --hard <先前的 commit>
 yarn install
 yarn deploy                   # 指令定義有變過的話要一起退回去
-pm2 restart <正式站的程序名>
+pm2 restart bc-djs-bot
 ```
 
 `.env`、`data/`、`logs/` 都不在版控，git 操作不會動到它們，所以回滾很乾淨。
@@ -111,20 +109,30 @@ pm2 restart <正式站的程序名>
 
 ---
 
+## 兩個 jail 的對照
+
+| | 測試 jail `DiscordBot-Test` | 正式 jail `DiscordBot` |
+|---|---|---|
+| 目錄 | `/root/BC_djs_bot_test` | `/root/BC_djs_bot` |
+| pm2 程序名 | `discord-bot` | `bc-djs-bot` |
+| 分支 | `test` | `main` |
+
 ## 常用的 jail 指令
+
+以下用測試站示範，正式站把目錄換成 `/root/BC_djs_bot`、程序名換成 `bc-djs-bot`。
 
 | 目的 | 指令 |
 |---|---|
 | 看程序狀態 | `pm2 list` |
-| 看即時 log | `pm2 logs bc-test` |
-| 重啟 | `pm2 restart bc-test --update-env` |
-| 停掉 | `pm2 stop bc-test` |
+| 看即時 log | `pm2 logs discord-bot` |
+| 重啟 | `pm2 restart discord-bot --update-env` |
+| 停掉 | `pm2 stop discord-bot` |
 | 開機自啟（設定過就不用再跑） | `pm2 save` |
-| 看當天的檔案 log | `tail -f /root/BC_djs_bot/logs/$(date +%Y-%m-%d).log` |
-| 只看錯誤 | `grep -i "error\|rejection" /root/BC_djs_bot/logs/$(date +%Y-%m-%d).log` |
-| 跑測試 | `cd /root/BC_djs_bot && yarn test` |
+| 看當天的檔案 log | `tail -f /root/BC_djs_bot_test/logs/$(date +%Y-%m-%d).log` |
+| 只看錯誤 | `grep -i "error\|rejection" /root/BC_djs_bot_test/logs/$(date +%Y-%m-%d).log` |
+| 跑測試 | `cd /root/BC_djs_bot_test && yarn test` |
 | 跑單一支測試 | `yarn test tests/pollStore.test.js` |
-| 確認目前版本 | `cd /root/BC_djs_bot && git log -1 --oneline` |
+| 確認目前版本 | `cd /root/BC_djs_bot_test && git log -1 --oneline` |
 
 `--update-env` 是必要的：改過 `.env` 之後不加這個參數，pm2 會沿用舊的環境變數。
 

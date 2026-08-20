@@ -1,7 +1,7 @@
 # U05　每日日文分享
 
-狀態：待決定（缺頻道 ID）
-進度：0/7
+狀態：未開始（阻擋項已解除）
+進度：1/7
 依賴：U03（記錄發過哪些項目，避免重複）
 可平行：可
 分支：`unit/U05-daily-japanese`
@@ -68,9 +68,12 @@
 
 ## 相關檔案
 
+**已經有的：**
+
+- `src/config/japaneseSeed.js` — **已產出 60 筆**（30 慣用句 ＋ 20 ことわざ ＋ 10 文法），2026-08-20 建立。欄位說明寫在檔案開頭的註解。使用者要續補或改寫都直接改這個檔
+
 **要新增的：**
 
-- `src/config/japaneseSeed.js` — 初始清單（進版控，當作首次建檔的種子）
 - `src/core/japanese.js` — 讀寫資料表、挑選邏輯、排版成 embed
 - `src/commands/jp/index.js` — `/jp` 指令
 - `src/jobs/dailyJapanese.js` — 每日排程任務（新增 `src/jobs/` 資料夾）
@@ -95,10 +98,19 @@
 
 ---
 
+## 頻道
+
+| 環境 | 頻道 ID |
+|---|---|
+| 測試站 | `1539905791564193862` |
+| 正式站 | `1217432781877940305` |
+
+寫進 `src/config/environments/test.js` 與 `production.js` 的 `channels.japanese`。
+
 ## 進度
 
-- [ ] 05-1 決定頻道（見下方阻擋項）
-- [ ] 05-2 `src/config/japaneseSeed.js` 初始清單（先放 20～30 筆，之後由使用者續補）
+- [x] 05-1 頻道 ID 確認（2026-08-20）
+- [x] 05-2 `src/config/japaneseSeed.js` 初始清單 60 筆（2026-08-20 先行產出，供使用者測試與續補）
 - [ ] 05-3 `src/core/japanese.js`：讀表、挑選、embed 排版
 - [ ] 05-4 `src/commands/jp/index.js`
 - [ ] 05-5 `src/jobs/dailyJapanese.js` ＋ `ready` 掛排程
@@ -123,7 +135,7 @@
 
 ## 阻擋項
 
-**要發到哪個頻道？** 需要頻道 ID（正式站與測試站各一個）。原始需求寫的是 `日本語コーナー`。
+無。
 
 ## 決策紀錄
 

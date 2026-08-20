@@ -8,12 +8,12 @@
 
 | | 編輯（本目錄） | 測試 jail `DiscordBot_test` | 正式 jail `DiscordBot` |
 |---|---|---|---|
-| 位置 | NAS SMB：`\\fongxiang.duckdns.org\admin_only\Program\Discord_bot\BC_djs_bot_test` | `/root/BC_djs_bot` | `/root/BC_djs_bot` |
+| 位置 | NAS SMB：`\\fongxiang.duckdns.org\admin_only\Program\Discord_bot\BC_djs_bot_test` | `/root/BC_djs_bot_test` | `/root/BC_djs_bot` |
 | 用途 | 改檔、commit、push | 執行與驗證 | 實際運行 |
 | 執行 process | **禁止** | 可，由使用者代跑 | 由使用者操作 |
 | 來源 | git 工作區 | `git clone -b test` | `git clone -b main`（同一個 repo） |
 | 抓檔 | — | `sh /root/update.sh` | `git pull origin main` |
-| 啟動 | — | pm2，程序名 `bc-test` | pm2 |
+| 啟動 | — | pm2，程序名 **`discord-bot`** | pm2，程序名 **`bc-djs-bot`** |
 | OS | Windows 11 | FreeBSD（TrueNAS jail） | FreeBSD（TrueNAS jail） |
 | Node | — | v24.14.1 | v24.14.1 |
 | `.env` | 測試站設定 | 測試站設定 | 正式站設定 |

@@ -27,17 +27,33 @@
 
 ---
 
+## 目錄結構（2026-08-20 使用者指定）
+
+所有內容都在服務根目錄下的 `Discord/` 資料夾裡，往下分兩類：
+
+```
+<掛載點>/Discord/
+   ├─ <身分組資料夾>/          依 Discord 身分組開放，一個身分組一個資料夾
+   │     例：楓之谷/  TRPG/  ...
+   └─ personal/
+         └─ <Discord ID>/     個人專屬，只有本人看得到
+```
+
+**注意是 `personal/<ID>` 兩層**，不是直接 `<ID>`。交接文件原本寫的是 `/Share` 與 `/Private/<ID>`，以這一版為準。
+
+身分組→資料夾名的對照放 `src/config/environments/<環境>.js` 的新欄位 `driveFolders`（`{roleId: 資料夾名}`），跟 `roles` 一樣兩個環境結構要一致。使用者看得到的資料夾 ＝ 他實際擁有的身分組所對應的那幾個，用 `member.roles.cache` 判斷。沒有任何對應身分組的人，就只看得到自己的 `personal/<ID>`。
+
 ## 架構
 
 ```
-語音／文字頻道
+文字頻道
    └─ /drive  →  String Select Menu 逐層瀏覽
-                    ├─ /Share            公用
-                    └─ /Private/<Discord ID>   私有，只有本人看得到
+                    ├─ 他有身分組的那幾個資料夾
+                    └─ 我的個人資料夾（personal/<自己的 ID>）
                           └─ 選中檔案 → Embed 附直連網址
                                             ↓
-                              bot 內建的 HTTP server（唯讀）
-                                 GET /api/file?token=...
+                              唯讀的 HTTP 下載路由
+                                 http://fongxiang.duckdns.org:5990/...
 ```
 
 **三個模組：**
@@ -62,7 +78,12 @@ const resolveSafe = (base, userPath) => {
 
 `startsWith(base)` **不夠**——`/data/share-evil` 也會通過。一定要比對 `base + path.sep`。另外 `path.resolve` 之後才比對，否則 `..` 還沒被解掉。
 
-**私有目錄的權限**：不依賴 TrueNAS 的 SMB／系統帳號，改用 `interaction.user.id` 決定他只能進 `/Private/<自己的 ID>`。使用者送回來的 `customId` **不可信任**——選單裡就算塞了別人的 ID，handler 也必須用 `interaction.user.id` 重新組一次路徑，不能直接用 customId 裡的值。`src/core/pollStore.js` 的 `isValidPollId()`（第 31 行）就是同一個教訓的產物：id 會組成檔名，不驗格式就等於開放任意路徑讀寫。
+**權限**：不依賴 TrueNAS 的 SMB／系統帳號，改用 Discord 身分判斷。
+
+- 個人資料夾：一律用 `interaction.user.id` 現場組出 `personal/<id>`
+- 身分組資料夾：用 `member.roles.cache.has(roleId)` 檢查，**每一次互動都重查**，不快取在 customId 裡
+
+使用者送回來的 `customId` **不可信任**——選單裡就算塞了別人的 ID 或沒領到的身分組資料夾，handler 也必須重新驗一次，不能直接採用 customId 帶回來的值。`src/core/pollStore.js` 的 `isValidPollId()`（第 31 行）就是同一個教訓的產物：id 會組成檔名，不驗格式就等於開放任意路徑讀寫。
 
 **直連網址**：不能直接把檔案路徑放進網址（等於公開整個目錄結構，而且任何人都能改路徑）。改為簽章 token：
 
@@ -105,7 +126,7 @@ const resolveSafe = (base, userPath) => {
 
 ## 進度
 
-- [ ] 06-1 確認掛載點路徑、對外網址與埠號（見阻擋項）
+- [ ] 06-1 確認掛載點路徑與 5990 的性質（見阻擋項）
 - [ ] 06-2 `src/core/drive.js`：列目錄、`resolveSafe()`、symlink 過濾、型別判斷
 - [ ] 06-3 `tests/drive.test.js`：**路徑穿越的攻擊案例要寫滿**（`../`、絕對路徑、`share-evil`、URL 編碼、空字串、`.`）
 - [ ] 06-4 簽章 token 的產生與驗證 ＋ 測試
@@ -124,9 +145,9 @@ const resolveSafe = (base, userPath) => {
 
 實機（測試 jail ＋ 測試伺服器）：
 
-1. `/drive` → 出現 `/Share` 與 `/Private` 兩個入口
+1. `/drive` → 只列出「自己有的身分組資料夾」＋「我的個人資料夾」
 2. 逐層進資料夾、回上一層都正常
-3. A 的面板看不到 B 的 `/Private`；把 customId 裡的 ID 換成別人的也拿不到
+3. 沒有某身分組的人看不到那個資料夾；A 看不到 B 的 `personal/`；把 customId 裡的 ID 或資料夾名換掉也拿不到
 4. 選中 `.mp4` → Embed 的網址在 Discord 裡可播放且**進度條拖得動**
 5. 網址過期後再點 → 403
 6. 目錄裡放一個 symlink 指到 jail 系統目錄 → 列表不顯示它
@@ -135,12 +156,18 @@ const resolveSafe = (base, userPath) => {
 
 ## 阻擋項
 
-1. NAS 資料夾在 jail 內的**掛載點路徑**是什麼？
-2. 直連網址要用哪個**對外網址與埠號**？（Discord 端要能連得到才播得出來）
-3. `/Share` 是所有伺服器成員都能看，還是限特定身分組？
+**只擋 06-5（下載路由），前面四項可以先做。**
+
+1. **`fongxiang.duckdns.org:5990` 是什麼？** 兩種可能，做法完全不同：
+   - **(a) 已經存在的檔案服務**，根目錄下有 `Discord/` 資料夾 → 那就不必自己起 HTTP server，`driveServer.js` 整個不用做，直接組出它的網址就好。但要確認它**有沒有存取控制**——如果任何人拿到網址就能下載，那 `personal/` 的隔離只擋得住「看不到」，擋不住「猜得到網址」
+   - **(b) 要我們自己在 5990 起 server** → 照原設計做 `driveServer.js`，並確認 jail 的 5990 有對外開通
+2. **NAS 資料夾在 jail 內的掛載點是什麼？**（bot 要用本地路徑列目錄，這一項不論 1 選哪個都需要）
+3. 身分組資料夾的對照：哪些身分組、對應哪個資料夾名？
 
 ## 決策紀錄
 
 - 2026-08-20　只做唯讀，Web 面板與上傳延後。使用者確認。
-- 2026-08-20　HTTP server 用 Node 內建 `node:http`，不引入 Express。理由：只有一個路由，為它多一個相依不划算。
-- 2026-08-20　直連網址用 HMAC 簽章 token，不放明文路徑。
+- 2026-08-20　目錄結構：`Discord/<身分組資料夾>` 與 `Discord/personal/<Discord ID>`。使用者指定。
+- 2026-08-20　對外網址 base 為 `fongxiang.duckdns.org:5990`。**性質待確認**（見阻擋項 1）。
+- 2026-08-20　自建 server 的話用 Node 內建 `node:http`，不引入 Express。理由：只有一個路由。
+- 2026-08-20　自建 server 的話，直連網址用 HMAC 簽章 token，不放明文路徑。
