@@ -1,7 +1,7 @@
 # U09　暗黑龍王計時器 `/horntail`
 
 狀態：進行中
-進度：9/10（只剩 09-10 測試伺服器實機驗收）
+進度：10/13（原定的 10 步全部完成並實機驗收通過；09-11～09-13 是驗收後追加的需求）
 依賴：**無**（不需要 U03 的 `state.js`，見「為什麼不做持久化」）
 工作目錄：`\\fongxiang.duckdns.org\admin_only\Program\Discord_bot\BC_djs_bot_test`
 （**不是**同層的 `BC_djs_bot`，那是已無作用的舊目錄）
@@ -87,7 +87,8 @@ member.roles.cache.has(config.permissionRoles.gm)
 
 **沒設定時要 fail closed**：`permissionRoles.gm` 是空字串的話，退回「只有管理員能用」，不是「所有人都能用」。少了這一行，任何一個環境忘了填 id 就會全開。
 
-**一個已知的小瑕疵**：`/help` 是讀各指令的 `default_member_permissions` 來過濾的，看不到身分組條件，所以 `/horntail` 會列給所有人看。非 GM 的人點了會得到一則 ephemeral 的拒絕訊息。這不影響安全性，先接受；真的礙眼再在 `src/core/helpText.js` 加一個 roleGated 標記。
+**一個已知的小瑕疵**：`/help` 是讀各指令的 `default_member_permissions` 來過濾的，看不到身分組條件，所以 `/horntail` 會列給所有人看。非 GM 的人點了會得到一則 ephemeral 的拒絕訊息。這不影響安全性，先接受。
+**（2026-08-21 更新：09-12 會把 `default_member_permissions` 改成 `0`，屆時方向會反過來 —— 變成只有管理員在 `/help` 看得到。詳見「追加需求」。）**
 
 ---
 
@@ -226,7 +227,13 @@ TTS 由 `sendWarn()` 發出後 `setTimeout` 5 秒刪除，送出與刪除都各�
 - [x] 09-7 GM 身分組檢查（指令 ＋ 每次按鈕互動，沒設定時 fail closed）＋ 兩個環境檔加 `permissionRoles`
 - [x] 09-8 `/horntail` 指令 ＋ `interactionCreate` 分派
 - [x] 09-9 jail `yarn test` 通過（2026-08-21：10 檔 287 測試全過，其中 timerState 27、moduleLayout 76）
-- [ ] 09-10 測試伺服器實機驗收，commit
+- [x] 09-10 測試伺服器實機驗收，commit（2026-08-21：驗收 11 條全數通過，含「三個同時跑 30 分鐘 log 無 429」）
+
+實機驗收後追加的三項需求（2026-08-21，見下方「追加需求」）：
+
+- [ ] 09-11 伺服器管理員也能操作（目前只認 GM 身分組）
+- [ ] 09-12 非 GM／非管理員的斜線指令列表看不到 `/horntail`
+- [ ] 09-13 綁定的語音頻道沒人時自動收面板（**擋住：需要 `src/main.js` 加 `GuildVoiceStates` intent**）
 
 ### 09-9 的指令（jail `DiscordBot_test`，請使用者代跑）
 
@@ -242,6 +249,56 @@ cd ~/BC_djs_bot_test && yarn vitest run --no-file-parallelism
 `/horntail` 本身沒有單元測試（碰 discord.js），這一步是確認
 `tests/timerState.test.js` 全綠、且 `tests/moduleLayout.test.js` 對新檔案的靜態檢查通過。
 
+## 追加需求（2026-08-21 實機驗收後，使用者提出）
+
+驗收 11 條全過之後提出的三項修改。**都還沒動手**，09-13 卡在領域外的檔案。
+
+### 09-11　伺服器管理員也能操作
+
+現在 `isGmMember()` 在 `permissionRoles.gm` 有值時**只認身分組**，管理員沒有 GM 身分組就用不了。
+改成「有 GM 身分組 **或** 有 `Administrator` 權限」。
+
+只改 `src/core/timerService.js` 的 `isGmMember()` 一個函式。
+這會推翻 2026-08-21 那條「管理員不自動放行」的決策，改完要把決策紀錄一起更新。
+
+### 09-12　非 GM／非管理員看不到這個指令
+
+**Discord 的 `default_member_permissions` 只吃權限位元、不吃身分組**，
+沒有辦法寫成「GM 才看得到」。唯一可行的做法是兩段式：
+
+1. 程式端把 `.setDefaultMemberPermissions(PermissionFlagsBits.SendMessages)`
+   改成 `.setDefaultMemberPermissions(0)` —— 除了管理員，所有人的指令列表都看不到。
+2. **伺服器端由有權限的人手動加覆寫**：
+   伺服器設定 → 整合 → 應用程式（本 bot）→ `/horntail` → 允許 GM 身分組。
+   這一步程式做不到：改指令權限的 API 需要 OAuth2 使用者授權，bot token 沒有這個權限。
+
+**副作用（已知並接受）**：`src/core/helpText.js` 是讀 `default_member_permissions` 過濾的，
+看不到伺服器端的覆寫，所以 **GM（非管理員）在 `/help` 裡也會看不到 `/horntail`**，
+只有管理員看得到。這跟原本「會列給所有人看」的瑕疵方向相反，但指令列表乾淨比較重要，
+真正的擋人邏輯本來就在 handler 裡。
+
+### 09-13　綁定的語音頻道沒人就自動收面板
+
+不管還有沒有計時器在倒數，語音頻道空了就停掉並收面板。
+
+**擋住這一項的前置條件**：`src/main.js` 的 intents 目前是
+`Guilds / GuildMessages / MessageContent / GuildMessageReactions / GuildMembers`，
+**沒有 `GuildVoiceStates`**。少了它 bot 完全看不到誰在語音頻道裡，這個功能做不出來。
+它**不是特權 intent**，不必去開發者後台開啟，加一行即可 ——
+但 `src/main.js` 不在本單元宣告的檔案領域，**要使用者同意才能改**。
+
+拿到同意後的做法：
+
+| 項目 | 做法 |
+|---|---|
+| 綁哪個頻道 | `/horntail` 當下**下指令的人所在的語音頻道**（`ctx.member.voice.channel`），存進面板狀態 |
+| 沒在語音頻道 | **不綁**，維持原本的兩小時／閒置兩個條件，不會一開就被收掉 |
+| 判斷 | tick 迴圈檢查該頻道的**非 bot 成員數**是否為 0 |
+| 寬限 | 新增 `VOICE_EMPTY_MS` 到 `src/config/horntail.js`。**建議 60 秒**：有人斷線重連是常事，立刻收掉的話打到一半面板就沒了。設 `0` 就是「沒人立刻停」 |
+| 收掉方式 | 跟總時限一樣走 `closePanel()`：停所有計時器、訊息標「面板已結束」、移除按鈕 |
+
+**待使用者確認**：①`main.js` 加 `GuildVoiceStates` 是否同意　②寬限 60 秒還是 0 秒。
+
 ## 驗收
 
 **單元測試**（`tests/timerState.test.js`，**不得 import discord.js**，所以 `timerState.js` 要跟 Discord 完全分離）：
@@ -253,7 +310,7 @@ cd ~/BC_djs_bot_test && yarn vitest run --no-file-parallelism
 5. 剩餘秒數的格式化：90 秒顯示為 `1:30`
 6. 三個招式各自獨立，停掉其中一個不影響另外兩個
 
-**實機**（測試伺服器）：
+**實機**（測試伺服器）——**2026-08-21 全部通過**：
 
 1. `/horntail` → 出現面板，三顆按鈕、三個招式都顯示初始秒數
 2. 按「吐火」→ 開始倒數，畫面每 2 秒更新一次
@@ -266,6 +323,13 @@ cd ~/BC_djs_bot_test && yarn vitest run --no-file-parallelism
 9. **非 GM 的人下 `/horntail`** → 被拒絕，沒有面板產生
 10. **非 GM 的人點面板上的按鈕** → 被拒絕，計時器狀態完全沒變（這一條比第 9 條重要：面板是公開的，按鈕誰都看得到）
 11. 把 `permissionRoles.gm` 故意改成空字串 → 只有管理員能用，**不是所有人都能用**
+
+**09-11～09-13 做完之後要補驗的**：
+
+12. 沒有 GM 身分組的**伺服器管理員**下 `/horntail` 與點按鈕 → 都可以操作
+13. 非 GM／非管理員打 `/` → **指令列表裡沒有 `/horntail`**（伺服器端覆寫加好後，GM 要看得到）
+14. 綁定的語音頻道最後一個人離開 → 面板在寬限時間後自動收起，倒數中的計時器一併停止
+15. 開面板時人不在語音頻道 → 面板正常運作，**不會**因為「沒綁語音」而被收掉
 
 ---
 
@@ -296,7 +360,8 @@ cd ~/BC_djs_bot_test && yarn vitest run --no-file-parallelism
 - 2026-08-21　面板多一顆「全部停止」按鈕（`ht:stop:<channelId>`）。理由：三個招式一個個關太慢，打完一場王要收尾時最需要一鍵停。它只停計時器、不收面板。
 - 2026-08-21　TTS 的文字（`buildWarnMessage`）與「面板已失效」的文字（`PANEL_GONE_TEXT`）都放在 `timerRender.js`。理由：都是輸出給使用者看的字串，集中在 render 層，09-5／09-6 的 service 只負責什麼時候送。
 - 2026-08-21　**閒置 30 分鐘只在「三個招式都停著」時才收面板**（與交接規格的字面寫法不同）。理由：照字面做的話，計時器跑滿 30 分鐘沒人按按鈕就會被收掉——正好會在「三個計時器同時跑 30 分鐘」這條驗收的終點把面板關掉。計時器在跑就是有人在用；被遺忘的、還在跑的面板由兩小時總時限收尾，API 用量一樣有上界。
-- 2026-08-21　`permissionRoles.gm` 設好時**只認身分組，管理員不自動放行**。理由：使用者的要求是「限 GM 身分組」，多開一個管理員後門會讓「非 GM 被拒絕」這條驗收在管理員身上驗不出來。要改成管理員也放行的話，只改 `isGmMember()` 一個地方。
+- 2026-08-21　~~`permissionRoles.gm` 設好時**只認身分組，管理員不自動放行**。~~ **實機驗收後由使用者推翻**：伺服器管理員也要能操作，見 09-11。原本的理由是「使用者說限 GM 身分組」，實際使用上管理員被擋在外面不合理。
+- 2026-08-21　實機驗收 11 條全數通過，含最重要的「三個計時器同時跑 30 分鐘、log 無 429」。節流設計（一個 tick、一次合併編輯、2 秒間隔、互動只立 dirty）驗證有效。
 - 2026-08-21　`isGmMember()` 放在 `timerService.js`。理由：它是本單元的權限判斷，另開 `src/core/permissions.js` 會超出單元宣告的檔案領域；日後有第二個功能要用再抽出去。
 - 2026-08-21　`ht:` 的分派放在 `isButton()` 區塊的**最前面**（早於 `poll:`）。理由：`parseHorntailCustomId` 認不出來就回 `null` 往下走，排前面不影響既有投票按鈕，而且少跑三個 parser。
 - 2026-08-21　`tick()` 只回報 `{warned, rolled}`，不做任何 I/O。理由：發 TTS 與編輯訊息的節流是 service 的責任，狀態機一旦碰 Discord 就沒辦法單元測試了。
