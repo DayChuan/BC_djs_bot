@@ -1,7 +1,7 @@
 # U09　暗黑龍王計時器 `/horntail`
 
 狀態：進行中
-進度：8/10（09-9 與 09-10 要在測試 jail／測試伺服器上做，等使用者代跑）
+進度：9/10（只剩 09-10 測試伺服器實機驗收）
 依賴：**無**（不需要 U03 的 `state.js`，見「為什麼不做持久化」）
 工作目錄：`\\fongxiang.duckdns.org\admin_only\Program\Discord_bot\BC_djs_bot_test`
 （**不是**同層的 `BC_djs_bot`，那是已無作用的舊目錄）
@@ -225,15 +225,18 @@ TTS 由 `sendWarn()` 發出後 `setTimeout` 5 秒刪除，送出與刪除都各�
 - [x] 09-6 總時限 2 小時、閒置 30 分鐘自動收掉、重啟後的舊面板處理
 - [x] 09-7 GM 身分組檢查（指令 ＋ 每次按鈕互動，沒設定時 fail closed）＋ 兩個環境檔加 `permissionRoles`
 - [x] 09-8 `/horntail` 指令 ＋ `interactionCreate` 分派
-- [ ] 09-9 jail `yarn test` 通過
+- [x] 09-9 jail `yarn test` 通過（2026-08-21：10 檔 287 測試全過，其中 timerState 27、moduleLayout 76）
 - [ ] 09-10 測試伺服器實機驗收，commit
 
 ### 09-9 的指令（jail `DiscordBot_test`，請使用者代跑）
 
 ```sh
 /root/update.sh                                    # git fetch + reset --hard origin/test
-cd /root/BC_djs_bot && yarn vitest run --no-file-parallelism
+cd ~/BC_djs_bot_test && yarn vitest run --no-file-parallelism
 ```
+
+**測試 jail 裡的專案路徑是 `/root/BC_djs_bot_test`**，不是 CLAUDE.md 寫的
+`/root/BC_djs_bot`（2026-08-21 實跑確認）。
 
 `--no-file-parallelism` 是必要的：多檔平行會卡在 `0/N` 不動，那不是測試失敗。
 `/horntail` 本身沒有單元測試（碰 discord.js），這一步是確認
