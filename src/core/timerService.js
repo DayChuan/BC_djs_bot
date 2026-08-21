@@ -252,13 +252,23 @@ export const stopAllSkills = (channelId, now = Date.now()) => {
  *
  * 沒設定 permissionRoles.gm 時 fail closed：退回「只有管理員能用」，
  * 不是「所有人都能用」。少了這個預設，任何一個環境忘了填 id 就會全開。
+ *
+ * permissionRoles.gm 是 { 伺服器id: 身分組id } 對照表（U07）：身分組 id 綁死在單一伺服器，
+ * 同一個 bot 進到第二個伺服器時，拿 A 伺服器的 id 去 B 查一定查不到，所以要用
+ * member.guild.id 分流。查不到該伺服器 = 只有管理員能用，fail closed 的語意不變，
+ * 新伺服器在填 id 之前管理員仍然可以用。
  */
 export const isGmMember = (member) => {
     if(!member) return false
 
     if(member.permissions && member.permissions.has(PermissionFlagsBits.Administrator)) return true
 
-    const gmRoleId = config.permissionRoles && config.permissionRoles.gm
+    const gm = config.permissionRoles && config.permissionRoles.gm
+    if(!gm) return false
+
+    //舊格式相容：gm 還是單一字串時沿用舊語意（不分伺服器都認）。
+    //現行兩個環境檔都已改成對照表，這條只保護「有環境檔還沒跟著改」的情況。
+    const gmRoleId = typeof gm === 'string' ? gm : gm[member.guild && member.guild.id]
     if(!gmRoleId) return false
 
     return Boolean(member.roles && member.roles.cache && member.roles.cache.has(gmRoleId))

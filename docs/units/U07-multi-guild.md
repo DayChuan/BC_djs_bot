@@ -1,7 +1,7 @@
 # U07　跨多伺服器的設定維護
 
-狀態：擱置
-進度：0/0
+狀態：擱置（完整 U07 未做；下方「只讓 /horntail 能在別的伺服器用」的窄版三步已完成，等部署）
+進度：0/0（窄版三步不計入本單元進度）
 依賴：無
 分支：（未開）
 來源：原 PLAN.md Phase 8
@@ -56,6 +56,50 @@
 **建議**：真的要在別的伺服器用，就做上面那三步的窄版，不要順手把整個 U07 一起做。
 但同時要在那個伺服器**只開放 `/horntail`**（伺服器設定 → 整合 → 關掉其他指令），
 否則有人下 `/selfrole` 會得到莫名其妙的結果。
+
+### 窄版三步：已完成的程式改動（2026-08-21）
+
+改動範圍就只有這三個檔，`/horntail` 本身一行都沒動：
+
+| 檔案 | 改了什麼 |
+|---|---|
+| `src/config/environments/production.js` | `permissionRoles.gm` 改成對照表；`guildIds` 與 `gm` 各加第二個伺服器 |
+| `src/config/environments/test.js` | `permissionRoles.gm` 改成對照表（結構要與 production 一致，值不變） |
+| `src/core/timerService.js` | `isGmMember()` 改用 `member.guild.id` 查對照表 |
+
+第二個伺服器邀的是**正式站 bot**（`applicationId: 1133309593787826267`），
+所以設定只寫在 `production.js`，**測試站看不到效果**，要合併到 `main` 部署後才會生效。
+
+### 上線檢查清單（部署時照這個順序做）
+
+1. `test` → `main` 合併，正式 jail `git pull`，重啟並重新註冊指令
+2. 把正式站 bot 邀進第二個伺服器
+3. **⚠ 立刻到「伺服器設定 → 整合 → BC bot」，只留 `/horntail`，把其他指令全部關掉。**
+   `/poll`、`/selfrole`、`/role-panel` 吃 `config.roles` / `config.channels`，那些 id 綁死在 BCKF，
+   在第二個伺服器會**靜默用錯 id**——不會報錯、不會有訊息，只是拿 BCKF 的身分組 id 去操作然後什麼都沒發生。
+   這一步漏掉不會有任何徵兆，只會有人回報「指令按了沒反應」
+4. 驗收：在第二個伺服器用**掛 GM（`1540261646436667452`）但不是管理員**的帳號下 `/horntail`，
+   要能開面板且按鈕能按；普通成員要被擋；管理員不論有沒有 GM 都要能用
+5. 回頭確認 BCKF 沒被影響：BCKF 的 GM（非管理員）仍然能用 `/horntail`
+
+第 4 步失敗（GM 被當成普通人擋掉）而管理員可用時，代表 `guildIds` / `gm` 那串 id 不是真正的伺服器 id，
+或 GM 身分組 id 填錯——查 `production.js` 那兩處，兩邊的 key 必須是同一串。
+
+### 決策紀錄
+
+- **`permissionRoles.gm`：單一字串 → `{伺服器id: 身分組id}` 對照表。**
+  身分組 id 綁死在單一伺服器，多伺服器下沒有「一個 id 走天下」的選項。做成對照表而不是
+  `data/guilds/<guildId>.json`（完整 U07 的方向），是因為 GM 只有一個值、一年改不到一次，
+  為它拉出一套資料檔與維護指令不划算；等真的要搬 `channels` / `roles` 時一起搬。
+- **查不到伺服器 → 回退「只有管理員能用」，不是全開。** 管理員檢查在函式最前面且沒動，
+  所以新伺服器在填 id 之前管理員照樣能用，fail closed 的語意不變。
+  `member.guild` 不存在（私訊、partial）也一樣走到 false。
+- **保留舊的單一字串格式。** `isGmMember()` 遇到字串時沿用舊語意（不分伺服器都認）。
+  現行兩個環境檔都已改成對照表，這條純粹是保險：日後有人加第三個環境檔卻沿用舊寫法時，
+  現有伺服器的 GM 不會無聲失效。
+- **沒有為這次改動寫單元測試。** `isGmMember()` 吃的是 discord.js 的 `GuildMember`，
+  測試檔不得直接或間接 import discord.js（見 CLAUDE.md），造假物件要連 `permissions.has`、
+  `roles.cache.has` 一起假，測到的是假物件不是實際行為。權限正確性照慣例走實機驗收（上方清單第 4、5 步）。
 
 ## 為什麼整個 U07 擱置
 
