@@ -26,6 +26,11 @@ let loop = null
 //編輯失敗多半是被限流了，罰站一下再試，不要下一個 tick 就馬上重打。
 const EDIT_PENALTY_MS = 10_000
 
+//一次編輯超過這個時間就記一筆 WARN。
+//正常情況下 message.edit() 大約幾百毫秒；超過 EDIT_MS(2 秒)就代表
+//下一個 tick 會因為 editing 還在而跳過，畫面更新間隔直接變成 4 秒、6 秒。
+const SLOW_EDIT_MS = 2000
+
 const startLoop = () => {
     if(loop) return
     loop = setInterval(tickAll, TICK_MS)
@@ -55,11 +60,30 @@ const flush = (entry, now) => {
     entry.lastEditAt = now
     entry.dirty = false
 
+    //editing 旗標會把「單次編輯很慢」轉成「畫面更新變慢」而不是塞爆佇列 ——
+    //這是刻意的，但也代表變慢的時候 log 上完全看不出來(它不是錯誤，只是等比較久)。
+    //所以要量：一次編輯超過 SLOW_EDIT_MS 就記一筆，
+    //否則「更新從 2 秒變成 6 秒」這種問題永遠只能用猜的。
+    const startedAt = Date.now()
+
     entry.message.edit(buildPanelMessage(entry.panel, now))
+        .then(() => {
+            const cost = Date.now() - startedAt
+            if(cost < SLOW_EDIT_MS) return
+
+            entry.slowEdits += 1
+            logger.warn(
+                `[horntail] 編輯偏慢 channel=${entry.panel.channelId} ` +
+                `耗時=${cost}ms 累計=${entry.slowEdits} 次`
+            )
+        })
         .catch((error) => {
             entry.lastEditAt = now + EDIT_PENALTY_MS
             entry.dirty = true
-            logger.error(`[horntail] 編輯面板失敗 channel=${entry.panel.channelId}：${error.message}`)
+            logger.error(
+                `[horntail] 編輯面板失敗 channel=${entry.panel.channelId} ` +
+                `耗時=${Date.now() - startedAt}ms：${error.message}`
+            )
         })
         .finally(() => {
             entry.editing = false
@@ -176,7 +200,10 @@ export const closePanel = async (channelId, reason = '未註明') => {
 
     //每一次收面板都留紀錄。少了它，log 裡只看得到「面板建立」，
     //查「那個面板到底有沒有收掉」時完全沒有依據。
-    logger.info(`[horntail] 面板收起 channel=${channelId}：${reason}`)
+    logger.info(
+        `[horntail] 面板收起 channel=${channelId}：${reason}` +
+        (entry.slowEdits > 0 ? `（期間偏慢的編輯 ${entry.slowEdits} 次）` : '')
+    )
 
     try{
         await entry.message.edit(buildPanelMessage(entry.panel, Date.now(), {ended: true}))
@@ -202,7 +229,11 @@ export const openPanel = async (channel) => {
     const message = await channel.send(buildPanelMessage(panel, now))
 
     panel.messageId = message.id
-    panels.set(channel.id, {panel, message, lastEditAt: now, dirty: false, editing: false, emptySince: null})
+    panels.set(channel.id, {
+        panel, message,
+        lastEditAt: now, dirty: false, editing: false,
+        emptySince: null, slowEdits: 0,
+    })
     startLoop()
 
     logger.info(`[horntail] 面板建立 channel=${channel.id} message=${message.id}`)
