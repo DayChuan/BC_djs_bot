@@ -1,6 +1,6 @@
 import {PermissionFlagsBits} from 'discord.js'
 import config from '@/config'
-import {EDIT_MS, TICK_MS, TTS_DELETE_MS} from '@/config/horntail'
+import {EDIT_MS, TICK_MS, TTS_DELETE_MS, VOICE_EMPTY_MS} from '@/config/horntail'
 import logger from '@/core/logger'
 import {buildPanelMessage, buildWarnMessage} from '@/core/timerRender'
 import {
@@ -14,7 +14,7 @@ import {
     touch,
 } from '@/core/timerState'
 
-//channelId -> {panel, message, lastEditAt, dirty, editing}
+//channelId -> {panel, message, lastEditAt, dirty, editing, emptySince}
 //一個頻道同時只有一個面板：兩個面板就是兩倍的編輯量，
 //而且畫面上會出現兩份互相矛盾的倒數。
 const panels = new Map()
@@ -87,6 +87,37 @@ const sendWarn = (entry, timer) => {
         })
 }
 
+/**
+ * 面板所在的語音頻道已經空了多久（毫秒）。有人在就回 0 並清掉計時起點。
+ *
+ * 面板一定開在語音頻道的聊天室（09-14），所以要監看的就是面板自己的頻道，
+ * 不必另外記要綁哪一個。
+ *
+ * `channel.members` 是即時算出來的（靠 GuildVoiceStates intent），
+ * 少了那個 intent 這裡永遠是 0 人，面板會在寬限時間到就被誤收 ——
+ * 所以 `src/main.js` 的 intent 是這一段的硬前提。
+ *
+ * 改版前建立的面板可能不在語音頻道，那種一律回 0（維持原本的兩個收面板條件）。
+ */
+const voiceEmptyFor = (entry, now) => {
+    const channel = entry.message.channel
+    const isVoice = channel && typeof channel.isVoiceBased === 'function' && channel.isVoiceBased()
+    if(!isVoice || !channel.members){
+        entry.emptySince = null
+        return 0
+    }
+
+    //bot 自己不算人。只有 bot 留在頻道裡的話，那就是沒人。
+    const humans = channel.members.filter((member) => !member.user.bot).size
+    if(humans > 0){
+        entry.emptySince = null
+        return 0
+    }
+
+    if(entry.emptySince === null) entry.emptySince = now
+    return now - entry.emptySince
+}
+
 const tickPanel = (entry, now) => {
     //總時限到、或太久沒人碰，就收掉。
     //少了這一段，打完王大家關掉 Discord，面板會每 2 秒編輯一次直到 bot 重啟。
@@ -94,9 +125,14 @@ const tickPanel = (entry, now) => {
     //閒置只在「三個招式都停著」時才算 —— 計時器還在跑就是有人在用，
     //不能因為連續 30 分鐘沒按按鈕就把打到一半的面板收掉。
     //真的被遺忘的跑著的面板由兩小時總時限收尾。
+    //語音頻道沒人就收，跟計時器有沒有在跑無關 —— 人都走光了，倒數給誰看。
+    //這是唯一一個「跑著也會收」的條件。
     const idle = !anyRunning(entry.panel) && isIdle(entry.panel, now)
-    if(isExpired(entry.panel, now) || idle){
-        const reason = isExpired(entry.panel, now) ? '已達兩小時總時限' : '30 分鐘無人操作'
+    const voiceEmpty = voiceEmptyFor(entry, now) >= VOICE_EMPTY_MS && entry.emptySince !== null
+    if(isExpired(entry.panel, now) || idle || voiceEmpty){
+        const reason = isExpired(entry.panel, now) ? '已達兩小時總時限'
+            : idle ? '30 分鐘無人操作'
+                : '語音頻道沒人'
         closePanel(entry.panel.channelId, reason).catch((error) => {
             logger.error(`[horntail] 自動收面板失敗：${error.message}`)
         })
@@ -166,7 +202,7 @@ export const openPanel = async (channel) => {
     const message = await channel.send(buildPanelMessage(panel, now))
 
     panel.messageId = message.id
-    panels.set(channel.id, {panel, message, lastEditAt: now, dirty: false, editing: false})
+    panels.set(channel.id, {panel, message, lastEditAt: now, dirty: false, editing: false, emptySince: null})
     startLoop()
 
     logger.info(`[horntail] 面板建立 channel=${channel.id} message=${message.id}`)

@@ -39,6 +39,12 @@ export const PANEL_MAX_MS = 2 * 60 * 60 * 1000
 //連續多久沒有人按過按鈕就自動收掉
 export const PANEL_IDLE_MS = 30 * 60 * 1000
 
+//面板所在的語音頻道連續多久沒有人(bot 不算)就自動收掉。
+//60 秒是寬限：有人斷線重連是常事，設 0 的話打到一半面板就沒了。
+//設 0 就是「沒人立刻收」。
+//這一條跟計時器有沒有在跑無關 —— 人都走光了，倒數給誰看。
+export const VOICE_EMPTY_MS = 60 * 1000
+
 //TTS 提醒訊息發出後幾毫秒自動刪除（每分鐘約三則，不刪會洗版）
 export const TTS_DELETE_MS = 5000
 
@@ -50,5 +56,6 @@ export default {
     EDIT_MS,
     PANEL_MAX_MS,
     PANEL_IDLE_MS,
+    VOICE_EMPTY_MS,
     TTS_DELETE_MS,
 }

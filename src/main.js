@@ -48,6 +48,10 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.GuildMembers,
+        //少了它，bot 完全看不到誰在語音頻道裡，
+        ///horntail 的「語音頻道沒人就收面板」(U09-13)做不出來。
+        //這不是特權 intent，不必去開發者後台開啟。
+        GatewayIntentBits.GuildVoiceStates,
     ],
      partials: [
         Partials.Channel,
