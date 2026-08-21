@@ -15,6 +15,14 @@ export default {
         role: '974484668483239938',     //測試伺服器_身分組
     },
 
+    //功能限定的身分組。
+    //刻意跟下面的 roles 分開：roles 是「emoji → 可自助領取的身分組」，
+    //src/core/selfRoles.js 會把它的每一個值當成人人可自己領的身分組 ——
+    //GM 塞進去等於開放所有人自助領 GM。
+    permissionRoles: {
+        gm: '974484668252565548',       //測試伺服器_GM
+    },
+
     //emoji → 身分組 id
     //emoji 清單要跟 production.js 一致，少了哪個啟動時會警告
     roles: {

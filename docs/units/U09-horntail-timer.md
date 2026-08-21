@@ -1,7 +1,7 @@
 # U09　暗黑龍王計時器 `/horntail`
 
-狀態：可開工（規格已確認）
-進度：0/10
+狀態：進行中
+進度：8/10（09-9 與 09-10 要在測試 jail／測試伺服器上做，等使用者代跑）
 依賴：**無**（不需要 U03 的 `state.js`，見「為什麼不做持久化」）
 工作目錄：`\\fongxiang.duckdns.org\admin_only\Program\Discord_bot\BC_djs_bot_test`
 （**不是**同層的 `BC_djs_bot`，那是已無作用的舊目錄）
@@ -13,13 +13,22 @@
 
 ## 目標
 
-一則公開面板，三顆按鈕分別對應暗黑龍王的三個招式，點下去開始倒數，剩 5 秒語音提醒，歸零後自動接下一輪，再點一次停止。
+一則公開面板，三顆按鈕分別對應暗黑龍王的三個招式，點下去開始倒數，快歸零時語音提醒，歸零後自動接下一輪，再點一次停止。
 
-| 招式 | 預設秒數 | customId |
-|---|---|---|
-| 吐火 | 60 | `ht:t:<面板id>:fire` |
-| 左手消技 | 90 | `ht:t:<面板id>:dispel` |
-| 黑鎖 | 60 | `ht:t:<面板id>:lock` |
+| 招式 | 預設秒數 | TTS 唸的字 | 顏色 | customId |
+|---|---|---|---|---|
+| 吐火 | 60 | `吐火` | 🔴 | `ht:t:<面板id>:fire` |
+| 左手消技 | 90 | `消技` | 🟡 | `ht:t:<面板id>:dispel` |
+| 黑鎖 | 30 | `黑鎖` | 🔵 | `ht:t:<面板id>:lock` |
+
+**提醒時機有兩個數字，不要弄混**：`WARN_SECONDS = 7` 是實際觸發的秒數，
+`WARN_DISPLAY_SECONDS = 5` 是面板上寫給人看的秒數。
+差的那兩秒是補償 Discord TTS 的固定開場「<發訊者> 說 …」，
+提早兩秒發出，招式名稱才剛好落在剩五秒的當下。
+**TTS 內容只有招式短名，不唸秒數**——唸完一整句話招式早就放完了。
+
+**顏色用 emoji 表達**，不是按鈕顏色：按鈕只有藍/紅/灰/綠，沒有黃色，
+所以按鈕的顏色留給「在跑（綠）／沒在跑（灰）」，招式的紅黃藍靠 emoji。
 
 ---
 
@@ -58,7 +67,7 @@
 
 ### 4. TTS 訊息會把頻道洗版
 
-三個招式循環，60/90/60 秒各提醒一次，等於**每分鐘約三則訊息**，打一場王下來就是上百則。
+三個招式循環，60/90/30 秒各提醒一次，等於**每分鐘約四則訊息**，打一場王下來就是上百則。
 
 **做法**：TTS 訊息發出後 **5 秒自動刪除**。刪除失敗一律吞掉只記 log（訊息可能已被人手動刪掉），這段程式在計時的路徑上，不能因為清垃圾失敗就把計時器打斷。
 
@@ -122,6 +131,8 @@ member.roles.cache.has(config.permissionRoles.gm)
 | `src/core/ephemeralTracker.js`（64 行） | 面板是**公開訊息**，不是 ephemeral，所以**不要**經過 tracker。只有「已失效」那種一次性的 ephemeral 回覆才需要 `trackEphemeral()` |
 | `src/core/logger.js` | `export default logger`，`info` / `warn` / `error` |
 | `src/config/index.js`（96 行） | `config.guildIds`、`config.channels`。這個單元目前不需要新增設定欄位 |
+| `src/config/polls.js`（13 行） | 設定檔的既有寫法：`export const` 一個個放、檔尾一個 `export default {…}` 收攏、`//` 註解說明每個數字為什麼是這個值 |
+| `tests/moduleLayout.test.js`（144 行） | 三項靜態檢查，寫新檔時會踩到：①`export default {` 必須在**所有** `export const/function/class` **之後**（否則 TDZ，整組指令靜默註冊不上）②`tests/` 下的檔案不得出現 `'discord.js'` 等字串 ③引號與括號平衡 |
 
 ---
 
@@ -139,25 +150,101 @@ member.roles.cache.has(config.permissionRoles.gm)
 
 ---
 
+## `timerState.js` 的介面（09-1 已完成，後面幾步照這個接）
+
+所有函式都吃 `now`（毫秒時間戳）當參數，**模組內不呼叫 `Date.now()`**，測試才推得動假時間。
+
+| 函式 | 回傳 | 說明 |
+|---|---|---|
+| `createPanel(channelId, now)` | panel | `{channelId, messageId: null, createdAt, expiresAt, lastActionAt, timers}` |
+| `getTimer(panel, key)` | timer \| `null` | timer 是 `{key, label, seconds, running, endsAt, warned, rounds}` |
+| `anyRunning(panel)` | bool | service 判斷該不該 `clearInterval` 用 |
+| `remainingSeconds(timer, now)` | number | 沒在跑時回**初始秒數**（面板顯示「按下去會從幾秒開始」） |
+| `startTimer / stopTimer / toggleTimer(panel, key[, now])` | timer \| `null` | 按鈕語意＝toggle：在跑就停、沒跑就從初始秒數重新開始 |
+| `stopAll(panel)` | panel | 總時限／閒置／換新面板時用 |
+| `touch(panel, now)` | panel | 有人按按鈕就呼叫，閒置判斷靠它 |
+| `tick(panel, now)` | `{warned: [key], rolled: [key]}` | **純計算不做 I/O**。`warned` 是這次跨進「剩 `WARN_SECONDS` 秒」的招式（同一輪只出現一次），`rolled` 是歸零並自動進入下一輪的招式 |
+| `isExpired(panel, now)` / `isIdle(panel, now)` | bool | 兩小時總時限／30 分鐘閒置 |
+| `formatRemaining(seconds)` | string | `90 → "1:30"`、`5 → "0:05"` |
+
+換輪用 `endsAt += 秒數` 疊加以保住相位，但落後超過一整輪時改成 `now + 秒數` 重新對時，
+避免行程卡頓後一次補跳好幾輪。
+
+## `timerRender.js` 的介面（09-3 已完成）
+
+碰 discord.js，**不能被測試檔 import**。
+
+| 匯出 | 說明 |
+|---|---|
+| `HT_PREFIX` | `'ht:'` |
+| `customId(kind, channelId, skillKey?)` | `ht:t:<channelId>:<key>`、`ht:stop:<channelId>`，最長約 31 字 |
+| `parseHorntailCustomId(raw)` | `{kind, channelId, skillKey}` 或 `null`。**channelId 驗過 snowflake 格式、skillKey 驗過在 `SKILLS` 裡**，customId 是用戶端送回來的，不可信任 |
+| `buildPanelMessage(panel, now, {ended})` | `{embeds, components}`。`ended: true` 時移除所有按鈕、標題加「（面板已結束）」 |
+| `buildWarnMessage(timer)` | `{content: 招式短名, tts: true, allowedMentions: {parse: []}}`，09-5 直接拿去 `channel.send()` |
+| `PANEL_GONE_TEXT` | 重啟後點舊按鈕的 ephemeral 回覆文字 |
+
+面板長相：一列三顆招式按鈕（emoji 是招式顏色；在跑＝綠色且標籤帶剩餘時間，沒跑＝灰色），
+第二列一顆灰色「全部停止」。Embed 內文每個招式一行，footer 固定提示
+「要在 Discord 設定開啟文字轉語音才聽得到」。
+
+## `timerService.js` 的介面（09-4 已完成）
+
+模組層級只有**一個** `panels` Map（`channelId → {panel, message, lastEditAt, dirty, editing}`）
+和**一個** `setInterval`。沒有任何面板時會 `clearInterval` 把迴圈收掉。
+
+| 匯出 | 說明 |
+|---|---|
+| `openPanel(channel)` | `async`。先 `closePanel` 舊的，再 `channel.send()` 發新面板 |
+| `closePanel(channelId)` | `async`。停掉所有計時器、訊息改成「已結束」並移除按鈕；找不到面板回 `false` |
+| `toggleSkill(channelId, key, now?)` | 切換某招。**只把 `dirty` 立起來，不編輯訊息**；找不到面板回 `false`（＝重啟後的舊面板） |
+| `stopAllSkills(channelId, now?)` | 全部停止，面板留著 |
+| `isGmMember(member)` | GM 檢查。沒設 `permissionRoles.gm` 時退回「只有管理員」（fail closed） |
+| `getPanel` / `hasPanel` | 查詢 |
+
+面板收掉的兩個條件（都在 tick 裡判斷，不用 `scheduler`）：
+**兩小時總時限**，以及**三個招式都停著且 30 分鐘沒人按按鈕**。
+TTS 由 `sendWarn()` 發出後 `setTimeout` 5 秒刪除，送出與刪除都各自 `.catch()` 吞掉。
+
+**編輯節流怎麼保證不撞 429**（本單元最重要的一條驗收）：
+
+1. 一個 tick 迴圈、一個頻道一個面板，三個招式**合併成同一次編輯** → 分母是面板不是招式。
+2. `now - lastEditAt < EDIT_MS`（2 秒）就跳過 → 上限 0.5 次/秒，限流是每頻道約 5 次/5 秒。
+3. 三個招式全停且畫面已是最新（`!dirty`）→ **完全不呼叫 API**，閒置面板的編輯次數是零。
+4. `editing` 旗標擋住重疊編輯：上一次還沒回來就跳過，網路一慢也不會堆出併發請求。
+5. 按鈕互動**不各自編輯**，只立 `dirty` 等下一次 tick → 分母不會再乘上人數。
+6. 編輯失敗時 `lastEditAt += 10 秒` 罰站再試，並且**一定用 `.catch()` 接住**——
+   未 await 的 Promise 若 reject，外層 try/catch 攔不到，Node 會終止行程。
+
 ## 進度
 
-- [ ] 09-1 `src/config/horntail.js` ＋ `src/core/timerState.js`（純狀態機）
-- [ ] 09-2 `tests/timerState.test.js`
-- [ ] 09-3 `src/core/timerRender.js`（Embed、按鈕、customId 組解）
-- [ ] 09-4 `src/core/timerService.js`：單一 tick、節流編輯、一頻道一面板
-- [ ] 09-5 TTS 提醒 ＋ 5 秒後自動刪除
-- [ ] 09-6 總時限 2 小時、閒置 30 分鐘自動收掉、重啟後的舊面板處理
-- [ ] 09-7 GM 身分組檢查（指令 ＋ 每次按鈕互動，沒設定時 fail closed）＋ 兩個環境檔加 `permissionRoles`
-- [ ] 09-8 `/horntail` 指令 ＋ `interactionCreate` 分派
+- [x] 09-1 `src/config/horntail.js` ＋ `src/core/timerState.js`（純狀態機）
+- [x] 09-2 `tests/timerState.test.js`
+- [x] 09-3 `src/core/timerRender.js`（Embed、按鈕、customId 組解）
+- [x] 09-4 `src/core/timerService.js`：單一 tick、節流編輯、一頻道一面板
+- [x] 09-5 TTS 提醒 ＋ 5 秒後自動刪除
+- [x] 09-6 總時限 2 小時、閒置 30 分鐘自動收掉、重啟後的舊面板處理
+- [x] 09-7 GM 身分組檢查（指令 ＋ 每次按鈕互動，沒設定時 fail closed）＋ 兩個環境檔加 `permissionRoles`
+- [x] 09-8 `/horntail` 指令 ＋ `interactionCreate` 分派
 - [ ] 09-9 jail `yarn test` 通過
 - [ ] 09-10 測試伺服器實機驗收，commit
+
+### 09-9 的指令（jail `DiscordBot_test`，請使用者代跑）
+
+```sh
+/root/update.sh                                    # git fetch + reset --hard origin/test
+cd /root/BC_djs_bot && yarn vitest run --no-file-parallelism
+```
+
+`--no-file-parallelism` 是必要的：多檔平行會卡在 `0/N` 不動，那不是測試失敗。
+`/horntail` 本身沒有單元測試（碰 discord.js），這一步是確認
+`tests/timerState.test.js` 全綠、且 `tests/moduleLayout.test.js` 對新檔案的靜態檢查通過。
 
 ## 驗收
 
 **單元測試**（`tests/timerState.test.js`，**不得 import discord.js**，所以 `timerState.js` 要跟 Discord 完全分離）：
 
 1. start 之後剩餘秒數隨時間遞減；用假時間戳推進，不要真的等
-2. 剩 5 秒時「該提醒」為真，且**同一輪只會為真一次**（連續 tick 不會重複觸發）
+2. 剩 `WARN_SECONDS`（7）秒時「該提醒」為真，且**同一輪只會為真一次**（連續 tick 不會重複觸發）
 3. 歸零後自動重置為初始秒數，並開始下一輪
 4. stop 之後不再遞減，再 start 從初始秒數重新開始
 5. 剩餘秒數的格式化：90 秒顯示為 `1:30`
@@ -167,7 +254,7 @@ member.roles.cache.has(config.permissionRoles.gm)
 
 1. `/horntail` → 出現面板，三顆按鈕、三個招式都顯示初始秒數
 2. 按「吐火」→ 開始倒數，畫面每 2 秒更新一次
-3. 倒數到剩 5 秒 → 出現 TTS 訊息並在 5 秒後自己消失
+3. 倒數到剩 7 秒 → 出現只有招式短名的 TTS 訊息（唸出來剛好落在剩五秒），5 秒後自己消失
 4. 歸零 → 自動回到 60 秒繼續跑，不需要再按
 5. 再按一次「吐火」→ 停止，另外兩個招式不受影響
 6. 三個同時跑 30 分鐘 → **log 裡沒有 429**（這條是本單元最重要的驗收）
@@ -181,9 +268,12 @@ member.roles.cache.has(config.permissionRoles.gm)
 
 ## 待你確認
 
-**GM 身分組的 id**（正式站與測試站各一個）。這一項只擋 09-7，前面六步都可以先做。
+**GM 身分組的 id**（2026-08-21 使用者已提供，**09-7 已填進兩個環境檔**）：
 
-拿到之後填進 `src/config/environments/production.js` 與 `test.js` 的 `permissionRoles.gm`。
+| 環境 | 檔案 | `permissionRoles.gm` |
+|---|---|---|
+| 正式站 | `src/config/environments/production.js` | `975025881007403028` |
+| 測試站 | `src/config/environments/test.js` | `974484668252565548` |
 
 ## 決策紀錄
 
@@ -194,3 +284,16 @@ member.roles.cache.has(config.permissionRoles.gm)
 - 2026-08-21　面板用 `channel.send()` 而非 interaction 回覆。理由：interaction 的 webhook 訊息 15 分鐘後就編輯不了。
 - 2026-08-21　**採用 TTS 訊息，不做語音頻道播放。** 使用者確認「主要注意的人聽得到就好」。
 - 2026-08-21　**指令與按鈕都限 GM 身分組**，設定放 `permissionRoles.gm`，沒設定時退回只有管理員能用。使用者指定。
+- 2026-08-21　**黑鎖從 60 秒改成 30 秒。** 使用者指定。連帶影響：TTS 訊息量從每分鐘約三則變成約四則，5 秒自動刪除的必要性更高。
+- 2026-08-21　`timerState.js` 的所有函式都把 `now` 當參數傳入，模組內不呼叫 `Date.now()`。理由：既滿足「用絕對時間戳重算、不累加 tick」，也讓單元測試能用假時間戳推進，不必真的等 60 秒，且不需要 `vi.useFakeTimers()`（測試環境對假計時器有地雷）。
+- 2026-08-21　**提醒時機從剩 5 秒改成剩 7 秒**（`WARN_SECONDS`），但面板文字仍寫 5 秒（`WARN_DISPLAY_SECONDS`）。理由：Discord TTS 唸的是「<發訊者> 說 <內容>」，固定開場約吃掉兩秒；提早兩秒發出，招式名稱才落在剩五秒的當下。那兩秒是實作補償，不是使用者需要知道的事。使用者指定。
+- 2026-08-21　**TTS 內容只有招式短名**（`吐火` / `消技` / `黑鎖`），不唸秒數、不唸全名。理由：語音現場要的是「聽到就知道哪一招」，唸完一整句話招式早就放完了。`voice` 欄位與 `label` 分開，面板仍顯示全名「左手消技」。使用者指定。
+- 2026-08-21　**招式顏色用 emoji（🔴吐火／🟡消技／🔵黑鎖），按鈕顏色留給執行狀態**（在跑＝綠、沒跑＝灰）。理由：Discord 按鈕只有藍紅灰綠四色、**沒有黃色**，用按鈕色湊不齊三招；emoji 沒這個限制。使用者指定配色。
+- 2026-08-21　測試不寫死秒數，一律從 `@/config/horntail` 讀 `SKILLS` / `WARN_SECONDS` / `PANEL_*` 回推。理由：黑鎖與提醒秒數在同一天就各改過一次，寫死等於每次調參都要改測試。
+- 2026-08-21　面板多一顆「全部停止」按鈕（`ht:stop:<channelId>`）。理由：三個招式一個個關太慢，打完一場王要收尾時最需要一鍵停。它只停計時器、不收面板。
+- 2026-08-21　TTS 的文字（`buildWarnMessage`）與「面板已失效」的文字（`PANEL_GONE_TEXT`）都放在 `timerRender.js`。理由：都是輸出給使用者看的字串，集中在 render 層，09-5／09-6 的 service 只負責什麼時候送。
+- 2026-08-21　**閒置 30 分鐘只在「三個招式都停著」時才收面板**（與交接規格的字面寫法不同）。理由：照字面做的話，計時器跑滿 30 分鐘沒人按按鈕就會被收掉——正好會在「三個計時器同時跑 30 分鐘」這條驗收的終點把面板關掉。計時器在跑就是有人在用；被遺忘的、還在跑的面板由兩小時總時限收尾，API 用量一樣有上界。
+- 2026-08-21　`permissionRoles.gm` 設好時**只認身分組，管理員不自動放行**。理由：使用者的要求是「限 GM 身分組」，多開一個管理員後門會讓「非 GM 被拒絕」這條驗收在管理員身上驗不出來。要改成管理員也放行的話，只改 `isGmMember()` 一個地方。
+- 2026-08-21　`isGmMember()` 放在 `timerService.js`。理由：它是本單元的權限判斷，另開 `src/core/permissions.js` 會超出單元宣告的檔案領域；日後有第二個功能要用再抽出去。
+- 2026-08-21　`ht:` 的分派放在 `isButton()` 區塊的**最前面**（早於 `poll:`）。理由：`parseHorntailCustomId` 認不出來就回 `null` 往下走，排前面不影響既有投票按鈕，而且少跑三個 parser。
+- 2026-08-21　`tick()` 只回報 `{warned, rolled}`，不做任何 I/O。理由：發 TTS 與編輯訊息的節流是 service 的責任，狀態機一旦碰 Discord 就沒辦法單元測試了。

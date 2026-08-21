@@ -5,6 +5,8 @@ import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePan
 import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
+import {PANEL_DENY_TEXT, PANEL_GONE_TEXT, parseHorntailCustomId} from '@/core/timerRender'
+import {isGmMember, stopAllSkills, toggleSkill} from '@/core/timerService'
 import {refreshEphemeral, trackEphemeral} from '@/core/ephemeralTracker'
 import {
     checkQuickEnd,
@@ -204,6 +206,38 @@ const handlePollPeek = async(interaction, parsed) => {
     await interaction.editReply(await peekPoll(parsed.pollId))
 }
 
+//暗黑龍王計時器的按鈕。面板是**公開訊息**，那三顆按鈕任何人都看得到，
+//所以每一次互動都要重新檢查 GM —— 只檢查指令是不夠的。
+//
+//權限與「面板已失效」都要在 deferUpdate 之前處理完：
+//deferUpdate 之後就不能再用 ephemeral 回覆拒絕，只能默默什麼都不做。
+const handleHorntail = async(interaction, parsed) => {
+    if(!isGmMember(interaction.member)){
+        await interaction.reply({content: PANEL_DENY_TEXT, flags: MessageFlags.Ephemeral})
+        await trackEphemeral(interaction)
+        return
+    }
+
+    //customId 是用戶端送回來的，不可信任：面板 id 必須就是這個頻道
+    let ok = false
+    if(parsed.channelId === interaction.channelId){
+        ok = parsed.kind === 'stop'
+            ? stopAllSkills(parsed.channelId)
+            : toggleSkill(parsed.channelId, parsed.skillKey)
+    }
+
+    //記憶體裡沒有這個面板 = bot 重啟過。訊息與按鈕都還在，但狀態已經沒了。
+    if(!ok){
+        await interaction.reply({content: PANEL_GONE_TEXT, flags: MessageFlags.Ephemeral})
+        await trackEphemeral(interaction)
+        return
+    }
+
+    //畫面交給 tick 迴圈的下一次編輯。每個互動各自編輯一次的話，
+    //等於把速率限制的分母乘上人數。
+    await interaction.deferUpdate()
+}
+
 export const action = async(interaction) => {
     try{
         if(interaction.isChatInputCommand()){
@@ -255,6 +289,13 @@ export const action = async(interaction) => {
             }
         }
         if(interaction.isButton()){
+            //ht: 前綴。排在投票之前，不會被任何既有的 parser 誤認。
+            const horntail = parseHorntailCustomId(interaction.customId)
+            if(horntail){
+                await handleHorntail(interaction, horntail)
+                return
+            }
+
             const parsed = parsePollCustomId(interaction.customId)
             if(parsed){
                 if(parsed.kind === 'q' || parsed.kind === 'qend') await handleQuick(interaction, parsed)

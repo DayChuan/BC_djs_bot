@@ -16,6 +16,14 @@ export default {
         role: '893157631370338325',     //身分組領取頻道
     },
 
+    //功能限定的身分組。
+    //刻意跟下面的 roles 分開：roles 是「emoji → 可自助領取的身分組」，
+    //src/core/selfRoles.js 會把它的每一個值當成人人可自己領的身分組 ——
+    //GM 塞進去等於開放所有人自助領 GM。
+    permissionRoles: {
+        gm: '975025881007403028',       //GM
+    },
+
     //emoji → 身分組 id
     //兩個環境的 emoji 清單必須一致，不一致時啟動會在 log 出現警告
     //(檢查邏輯見 src/config/index.js)
