@@ -4,7 +4,7 @@
 進度：0/5
 依賴：U01（同樣改 `main.js` 與 `loader.js`，等 U01 併回 `test` 再開工）
 可平行：**不可與 U01 同時進行**
-分支：`unit/U02-drop-vue`
+分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
 來源：`docs/ISSUES.md` 的 M-02、M-06
 
 ---

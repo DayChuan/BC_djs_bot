@@ -4,7 +4,9 @@
 進度：0/5
 依賴：無
 可平行：可（新檔為主，只在 `src/events/ready/index.js` 加一行）
-分支：`unit/U03-state`
+分支：`unit/U03-state`（**已經開了就做完再合併回 `test`；之後的單元不要再開分支**，
+見 CLAUDE.md 的單元制第 2 條。合併時用 `git checkout test && git merge --no-ff unit/U03-state`，
+但要先確認沒有別條線正在同一個工作目錄裡改檔）
 來源：原 PLAN.md Phase 2-C／2-D
 
 ---

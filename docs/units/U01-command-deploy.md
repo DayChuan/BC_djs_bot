@@ -4,7 +4,7 @@
 進度：0/7
 依賴：無
 可平行：**不可與 U02 同時進行**（兩者都改 `src/main.js`、`src/core/loader.js`）
-分支：`unit/U01-command-deploy`
+分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
 來源：`docs/ISSUES.md` 的 M-01、M-05、C-07
 
 ---

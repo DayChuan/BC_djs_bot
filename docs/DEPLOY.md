@@ -16,29 +16,37 @@ NAS 編輯 ──commit──> unit/UXX 分支 ──merge──> test 分支 �
 
 ---
 
-## 1. NAS 端：開一個單元分支
+## 1. NAS 端：直接在 `test` 上做
 
 ```powershell
 cd \\fongxiang.duckdns.org\admin_only\Program\Discord_bot\BC_djs_bot_test
-git checkout test
+git status --short          # 先看有沒有別條線正在改的檔案
 git pull origin test
-git checkout -b unit/U01-command-deploy    # 分支名 = 單元編號
 ```
 
-平行做多個單元時，每個單元各自一條分支，互不影響。
+**不要開分支、不要切換分支。** 整個專案只有這一份工作目錄，分支是綁在工作目錄上的：
+切走的瞬間，另一條平行作業腳下的檔案也跟著被切走，而且它不會知道，
+後續的 commit 會全部落在你的分支上（2026-08-21 發生過一次）。
 
-## 2. NAS 端：單元做完，併回 `test` 並推上去
+平行作業的隔離靠的是**各單元宣告的「檔案領域」不重疊**，不是分支。
+
+## 2. NAS 端：commit 並推上去
 
 ```powershell
-git checkout test
-git merge --no-ff unit/U01-command-deploy
+git status --short          # 確認要 commit 的都是自己的檔案
+git add <檔案>              # 具名 add，不要用 -A 或 .
+git commit
 git push origin test
-git branch -d unit/U01-command-deploy
 ```
 
-`--no-ff` 保留一個合併節點，之後要回滾整個單元時直接 revert 那一個 commit 就好。
+推之前確認一下分支沒有被切走：
 
-**多個單元平行時**：先合併的那個推完，後面的要先 `git pull origin test` 再合併，衝突在 NAS 端解掉，不要推上去才發現。
+```powershell
+git rev-parse --abbrev-ref HEAD    # 應該是 test
+```
+
+`push` 出現 `Everything up-to-date` 但你確定有 commit 過，就是分支被切走了。
+用 `git log --oneline --all -5` 找到那個 commit，再 `git branch -f test <commit>`。
 
 ## 3. 測試 jail `DiscordBot_test`：抓下來驗證
 

@@ -4,7 +4,7 @@
 進度：1/7
 依賴：U03（記錄發過哪些項目，避免重複）
 可平行：可
-分支：`unit/U05-daily-japanese`
+分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
 來源：原 PLAN.md Phase 5
 
 ---

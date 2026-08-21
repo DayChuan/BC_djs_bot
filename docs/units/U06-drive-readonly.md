@@ -4,7 +4,7 @@
 進度：0/8
 依賴：無
 可平行：**可，與其他單元完全不重疊**（全部是新檔案）
-分支：`unit/U06-drive-readonly`
+分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
 來源：`docs/Functions/Claude_Handover_NAS_File_System.md`
 
 ---
