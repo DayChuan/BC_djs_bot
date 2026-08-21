@@ -4,7 +4,8 @@ import {formatRemaining, remainingSeconds} from '@/core/timerState'
 
 //customId 的格式是 ht:<動作>:<頻道id>[:<招式key>]。
 //  ht:t:<channelId>:<skillKey>   切換某個招式(在跑就停、沒跑就開)
-//  ht:stop:<channelId>           全部停止
+//  ht:stop:<channelId>           全部停止(計時器歸零停下，面板留著可以再開)
+//  ht:end:<channelId>            結束面板(整個收掉、移除按鈕，要用得重下指令)
 //一個頻道同時只有一個面板，所以 channelId 就足以認出是哪個面板，
 //不必再塞訊息 id。最長約 31 字，離 Discord 的 100 字元上限很遠。
 //
@@ -32,7 +33,7 @@ export const parseHorntailCustomId = (raw) => {
     const [, kind, channelId, skillKey] = text.split(':')
     if(!channelId || !SNOWFLAKE.test(channelId)) return null
 
-    if(kind === 'stop') return {kind, channelId, skillKey: null}
+    if(kind === 'stop' || kind === 'end') return {kind, channelId, skillKey: null}
     if(kind !== 't') return null
     if(!SKILL_KEYS.has(skillKey)) return null
 
@@ -76,7 +77,8 @@ export const buildPanelMessage = (panel, now, {ended = false} = {}) => {
     //沒寫的話，聽不到的人會以為功能壞了。
     embed.setFooter({
         text: `剩 ${WARN_DISPLAY_SECONDS} 秒語音提醒 · 要在 Discord 設定開啟「文字轉語音」才聽得到`
-            + '\n按一次開始、再按一次停止 · 歸零後自動接下一輪',
+            + '\n按一次開始、再按一次停止 · 歸零後自動接下一輪'
+            + '\n用完請按「結束面板」收起來',
     })
 
     const skillRow = new ActionRowBuilder().addComponents(
@@ -89,11 +91,18 @@ export const buildPanelMessage = (panel, now, {ended = false} = {}) => {
             .setStyle(styleOf(timer)))
     )
 
+    //「全部停止」只是把三個計時器停下，面板留著可以再按開始；
+    //「結束面板」才是整個收掉。兩顆分開是因為打王中途常常要全部暫停一下，
+    //如果只有一顆而它會把面板收掉，暫停一次就要重下一次指令。
     const stopRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(customId('stop', panel.channelId))
             .setLabel('全部停止')
-            .setStyle(ButtonStyle.Secondary)
+            .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+            .setCustomId(customId('end', panel.channelId))
+            .setLabel('結束面板')
+            .setStyle(ButtonStyle.Danger)
     )
 
     return {embeds: [embed], components: [skillRow, stopRow]}
@@ -113,7 +122,14 @@ export const buildWarnMessage = (timer) => ({
 export const PANEL_GONE_TEXT = '這個面板已經失效（bot 重新啟動過），請重新輸入 `/horntail`。'
 
 //非 GM 操作時的回覆。面板是公開訊息，按鈕誰都看得到，所以這句會常常出現。
-export const PANEL_DENY_TEXT = '這個計時器只有 GM 能操作。'
+export const PANEL_DENY_TEXT = '這個計時器只有 GM 或伺服器管理員能操作。'
+
+//只能開在語音頻道的文字聊天裡。
+//理由是這個面板是打王現場用的，而 TTS 提醒是由「正在看該頻道的人」的用戶端朗讀的 ——
+//開在一般文字頻道的話，人在語音、眼睛在別的頻道，提醒等於不存在。
+export const PANEL_VOICE_ONLY_TEXT =
+    '這個指令只能在**語音頻道的聊天室**裡使用。\n'
+    + '請先進入語音頻道，點開它右側的聊天圖示，在那裡輸入 `/horntail`。'
 
 export default {
     HT_PREFIX,
@@ -123,4 +139,5 @@ export default {
     buildWarnMessage,
     PANEL_GONE_TEXT,
     PANEL_DENY_TEXT,
+    PANEL_VOICE_ONLY_TEXT,
 }

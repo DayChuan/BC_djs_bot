@@ -97,8 +97,7 @@ const tickPanel = (entry, now) => {
     const idle = !anyRunning(entry.panel) && isIdle(entry.panel, now)
     if(isExpired(entry.panel, now) || idle){
         const reason = isExpired(entry.panel, now) ? '已達兩小時總時限' : '30 分鐘無人操作'
-        logger.info(`[horntail] 自動收面板 channel=${entry.panel.channelId}：${reason}`)
-        closePanel(entry.panel.channelId).catch((error) => {
+        closePanel(entry.panel.channelId, reason).catch((error) => {
             logger.error(`[horntail] 自動收面板失敗：${error.message}`)
         })
         return
@@ -131,13 +130,17 @@ export const hasPanel = (channelId) => panels.has(channelId)
  *
  * 訊息可能已經被人手動刪掉，編輯失敗只記 log —— 收尾失敗不該往外丟。
  */
-export const closePanel = async (channelId) => {
+export const closePanel = async (channelId, reason = '未註明') => {
     const entry = panels.get(channelId)
     if(!entry) return false
 
     panels.delete(channelId)
     stopAll(entry.panel)
     if(panels.size === 0) stopLoop()
+
+    //每一次收面板都留紀錄。少了它，log 裡只看得到「面板建立」，
+    //查「那個面板到底有沒有收掉」時完全沒有依據。
+    logger.info(`[horntail] 面板收起 channel=${channelId}：${reason}`)
 
     try{
         await entry.message.edit(buildPanelMessage(entry.panel, Date.now(), {ended: true}))
@@ -156,7 +159,7 @@ export const closePanel = async (channelId) => {
  * 指令的回覆是 webhook 訊息，壽命 15 分鐘，之後就編輯不了了，而面板要活兩小時。
  */
 export const openPanel = async (channel) => {
-    await closePanel(channel.id)
+    await closePanel(channel.id, '被新面板取代')
 
     const now = Date.now()
     const panel = createPanel(channel.id, now)
@@ -201,20 +204,26 @@ export const stopAllSkills = (channelId, now = Date.now()) => {
 }
 
 /**
- * GM 身分組檢查。指令與**每一次**按鈕互動都要各檢查一次 ——
- * 面板是公開訊息，那三顆按鈕任何人都看得到，按下去就是一次 interaction。
+ * 操作權限檢查：**GM 身分組 或 伺服器管理員**。
+ * 指令與**每一次**按鈕互動都要各檢查一次 ——
+ * 面板是公開訊息，那幾顆按鈕任何人都看得到，按下去就是一次 interaction。
  *
  * setDefaultMemberPermissions() 只吃權限位元、不吃身分組，所以擋不了這個，
  * 一定要寫在 handler 裡。
  *
+ * 管理員一律放行（09-11）：原本只認 GM 身分組，結果沒掛 GM 的管理員自己用不了，
+ * 而管理員本來就能改身分組，擋他等於只是多繞一圈。
+ *
  * 沒設定 permissionRoles.gm 時 fail closed：退回「只有管理員能用」，
- * 不是「所有人都能用」。少了這一行，任何一個環境忘了填 id 就會全開。
+ * 不是「所有人都能用」。少了這個預設，任何一個環境忘了填 id 就會全開。
  */
 export const isGmMember = (member) => {
     if(!member) return false
 
+    if(member.permissions && member.permissions.has(PermissionFlagsBits.Administrator)) return true
+
     const gmRoleId = config.permissionRoles && config.permissionRoles.gm
-    if(!gmRoleId) return Boolean(member.permissions && member.permissions.has(PermissionFlagsBits.Administrator))
+    if(!gmRoleId) return false
 
     return Boolean(member.roles && member.roles.cache && member.roles.cache.has(gmRoleId))
 }

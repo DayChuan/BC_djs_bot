@@ -6,7 +6,7 @@ import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
 import {PANEL_DENY_TEXT, PANEL_GONE_TEXT, parseHorntailCustomId} from '@/core/timerRender'
-import {isGmMember, stopAllSkills, toggleSkill} from '@/core/timerService'
+import {closePanel, hasPanel, isGmMember, stopAllSkills, toggleSkill} from '@/core/timerService'
 import {refreshEphemeral, trackEphemeral} from '@/core/ephemeralTracker'
 import {
     checkQuickEnd,
@@ -219,8 +219,26 @@ const handleHorntail = async(interaction, parsed) => {
     }
 
     //customId 是用戶端送回來的，不可信任：面板 id 必須就是這個頻道
+    const sameChannel = parsed.channelId === interaction.channelId
+
+    //「結束面板」：整個收掉、移除按鈕。這一支要 await ——
+    //closePanel 自己會把訊息改成「已結束」，不經過 tick 迴圈
+    //(面板都已經從 panels 移除了，tick 不會再碰它)。
+    if(parsed.kind === 'end'){
+        if(!sameChannel || !hasPanel(parsed.channelId)){
+            await interaction.reply({content: PANEL_GONE_TEXT, flags: MessageFlags.Ephemeral})
+            await trackEphemeral(interaction)
+            return
+        }
+
+        //先 deferUpdate 佔住這次互動(三秒內一定要回應)，再去收面板。
+        await interaction.deferUpdate()
+        await closePanel(parsed.channelId, `${interaction.user.tag} 手動結束`)
+        return
+    }
+
     let ok = false
-    if(parsed.channelId === interaction.channelId){
+    if(sameChannel){
         ok = parsed.kind === 'stop'
             ? stopAllSkills(parsed.channelId)
             : toggleSkill(parsed.channelId, parsed.skillKey)
