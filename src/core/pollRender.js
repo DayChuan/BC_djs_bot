@@ -358,11 +358,12 @@ export const buildClosedMessage = (poll) => {
 /////////////////////////// 快速投票 ///////////////////////////
 
 //Discord 的按鈕只有這四種內建配色，沒有黃色。
-//二選一＝紅藍、三選一＝紅藍灰、四選一＝紅藍灰綠。
+//二選一＝藍紅、三選一＝藍紅灰、四選一＝藍紅灰綠。
+//藍排最前面：它是預設的「正向」選項，發起人不必每次特地說明哪個是贊成。
 //不掛 emoji，顏色本身就是選項。
 export const QUICK_COLORS = [
-    {key: 'o0', label: '紅', style: ButtonStyle.Danger},
-    {key: 'o1', label: '藍', style: ButtonStyle.Primary},
+    {key: 'o0', label: '藍', style: ButtonStyle.Primary},
+    {key: 'o1', label: '紅', style: ButtonStyle.Danger},
     {key: 'o2', label: '灰', style: ButtonStyle.Secondary},
     {key: 'o3', label: '綠', style: ButtonStyle.Success},
 ]
@@ -370,14 +371,21 @@ export const QUICK_COLORS = [
 export const QUICK_MIN_CHOICES = 2
 export const QUICK_MAX_CHOICES = QUICK_COLORS.length
 
-//依選項數取出要用的顏色
+//依選項數取出要用的顏色。沒有指定文字時，顏色名本身就是選項文字。
 export const quickOptions = (count) => QUICK_COLORS
     .slice(0, Math.max(QUICK_MIN_CHOICES, Math.min(QUICK_MAX_CHOICES, Number(count) || 0)))
     .map(({key, label}) => ({key, label}))
 
-const styleOf = (key) => {
-    const found = QUICK_COLORS.find((color) => color.key === key)
-    return found ? found.style : ButtonStyle.Secondary
+//先比對文字、再退回用 key 查。
+//2026-08-21 把藍紅對調之前發出的投票，它的 o0 是紅色；只看 key 的話，
+//那些訊息重畫時會變成「紅」字配藍底。舊投票最多再活 24 小時，
+//但顏色對不上的按鈕在語音現場就是會被按錯，多這一段比較保險。
+const styleOf = (option) => {
+    const byLabel = QUICK_COLORS.find((color) => color.label === option.label)
+    if(byLabel) return byLabel.style
+
+    const byKey = QUICK_COLORS.find((color) => color.key === option.key)
+    return byKey ? byKey.style : ButtonStyle.Secondary
 }
 
 //快速投票的訊息。跟一般投票不同，它是公開即時更新的 ——
@@ -421,7 +429,7 @@ export const buildQuickMessage = (poll, {closed = false} = {}) => {
         poll.options.map((option) => new ButtonBuilder()
             .setCustomId(customId('q', poll.id, option.key))
             .setLabel(option.label)
-            .setStyle(styleOf(option.key)))
+            .setStyle(styleOf(option)))
     )
 
     const endRow = new ActionRowBuilder().addComponents(

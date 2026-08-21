@@ -112,7 +112,7 @@
 | `src/commands/quickpoll/index.js`（88 行） | **階段一的指令寫法直接照抄這一份**：`SlashCommandBuilder` ＋ `addChoices` ＋ `setDefaultMemberPermissions` ＋ `deferReply({flags: MessageFlags.Ephemeral})` ＋ 失敗時 `editReply` 友善訊息的完整範例。階段二的投票也可以參考它怎麼呼叫 `createAndPublish()` |
 | `src/core/state.js`（U03 產出） | `getState('vmute')` / `updateState('vmute', fn)` |
 | `src/core/scheduler.js`（209 行） | `scheduleAt(key, when, task)` 一次性排程、`cancel(key)`、`has(key)`。key 建議用 `vmute:<guildId>:<userId>`，覆蓋靜音時先 `cancel` 舊的 |
-| `src/core/pollRender.js` 的 `QUICK_COLORS`（第 363 行）、`buildQuickMessage()`（第 385 行）、`percentBar()`（第 80 行） | 階段二的投票畫面。Discord 按鈕只有紅(`Danger`)、藍(`Primary`)、綠(`Success`)、灰(`Secondary`)四種內建色，**沒有黃色** |
+| `src/core/pollRender.js` 的 `QUICK_COLORS`、`quickOptions()`、`buildQuickMessage()`、`percentBar()`（檔案後段「快速投票」那一節） | 階段二的投票畫面。Discord 按鈕只有藍(`Primary`)、紅(`Danger`)、灰(`Secondary`)、綠(`Success`)四種內建色，**沒有黃色**。順序是**藍在前**（藍＝正向），所以「同意」用 `o0`、「反對」用 `o1` |
 | `src/core/pollService.js` 的 `handleQuickVote()`（第 526 行）、`checkQuickEnd()`（第 545 行） | 快速投票的計票與提早結束怎麼寫的 |
 | `src/core/logger.js` | `export default logger` |
 | `src/config/index.js` | `config.channels`、`config.guildIds`。要在特定頻道公告的話從這裡拿 |

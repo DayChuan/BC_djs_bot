@@ -23,6 +23,7 @@
 | [U05](./units/U05-daily-japanese.md) | 每日日文分享（讀自維護資料表） | 未開始 | 1/7 | U03 | 可 |
 | [U06](./units/U06-drive-readonly.md) | `/drive` NAS 檔案瀏覽（唯讀） | 未開始 | 0/8 | — | **可，完全獨立** |
 | [U07](./units/U07-multi-guild.md) | 跨多伺服器的設定維護 | 擱置 | — | — | — |
+| [U08](./units/U08-quickpoll-labels.md) | `/quickpoll` 自訂選項文字 ＋ 藍紅順序對調 | **待驗收** | 3/4 | — | — |
 
 已完成的單元收在 [units/done.md](./units/done.md)，平常不需要讀。
 

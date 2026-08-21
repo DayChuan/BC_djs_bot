@@ -1,6 +1,7 @@
 import {MessageFlags, PermissionFlagsBits, SlashCommandBuilder} from 'discord.js'
 import {QUICK_MAX_CHOICES, QUICK_MIN_CHOICES, quickOptions} from '@/core/pollRender'
 import {createAndPublish} from '@/core/pollService'
+import {parseOptionsInput} from '@/core/pollStore'
 import logger from '@/core/logger'
 
 const DEFAULT_MINUTES = 30
@@ -18,13 +19,18 @@ export const command = new SlashCommandBuilder()
         .setMaxLength(200))
     .addIntegerOption((option) => option
         .setName('choices')
-        .setDescription('幾選一：2=紅藍、3=紅藍灰、4=紅藍灰綠')
+        .setDescription('幾選一：2=藍紅、3=藍紅灰、4=藍紅灰綠')
         .setRequired(true)
         .addChoices(
-            {name: '二選一（紅／藍）', value: 2},
-            {name: '三選一（紅／藍／灰）', value: 3},
-            {name: '四選一（紅／藍／灰／綠）', value: 4},
+            {name: '二選一（藍／紅）', value: 2},
+            {name: '三選一（藍／紅／灰）', value: 3},
+            {name: '四選一（藍／紅／灰／綠）', value: 4},
         ))
+    //按顏色順序給文字。不給就沿用顏色名，跟改版前的行為一樣。
+    .addStringOption((option) => option
+        .setName('labels')
+        .setDescription('各選項的文字，依「藍,紅,灰,綠」的順序用逗號分開。例：會中,想太多')
+        .setMaxLength(200))
     .addIntegerOption((option) => option
         .setName('minutes')
         .setDescription(`幾分鐘後自動結束（預設 ${DEFAULT_MINUTES} 分鐘）`)
@@ -46,6 +52,27 @@ export const action = async(ctx) => {
         return
     }
 
+    //選項文字。parseOptionsInput 會吃掉全形逗號、去掉空白與重複，
+    //回傳的 key 依序就是 o0、o1…，跟 QUICK_COLORS 的顏色順序對得上。
+    const labelsText = ctx.options.getString('labels')
+    let options = quickOptions(choices)
+    if(labelsText){
+        const custom = parseOptionsInput(labelsText)
+        //數量對不上就直接擋掉，不要自作主張補顏色名或砍掉多的 ——
+        //按鈕文字和顏色的對應關係一旦錯位，現場就是集體投錯。
+        if(custom.length !== choices){
+            await ctx.reply({
+                content:
+                    `labels 要剛好 ${choices} 個（目前 ${custom.length} 個），` +
+                    `依「${quickOptions(choices).map((item) => item.label).join('、')}」的順序用逗號分開。\n` +
+                    '例：`/quickpoll question:要開團嗎 choices:2 labels:會中,想太多`',
+                flags: MessageFlags.Ephemeral,
+            })
+            return
+        }
+        options = custom
+    }
+
     const minutes = ctx.options.getInteger('minutes') || DEFAULT_MINUTES
 
     await ctx.deferReply({flags: MessageFlags.Ephemeral})
@@ -58,7 +85,7 @@ export const action = async(ctx) => {
         channelId: ctx.channel.id,
         title: ctx.options.getString('question'),
         description: '',
-        options: quickOptions(choices),
+        options,
         multi: false,
         multiChar: false,
         identityGroup: null,
@@ -75,7 +102,10 @@ export const action = async(ctx) => {
         return
     }
 
-    logger.info(`建立快速投票：${poll.id}「${poll.title}」by=${ctx.user.tag} ${choices} 選一 ${minutes} 分鐘`)
+    logger.info(
+        `建立快速投票：${poll.id}「${poll.title}」by=${ctx.user.tag} ` +
+        `${choices} 選一 ${minutes} 分鐘 選項=[${options.map((item) => item.label).join(',')}]`
+    )
     await ctx.editReply(
         `已發起 ${choices} 選一的快速投票，${minutes} 分鐘後自動結束。\n` +
         '你或管理員可以隨時按「結束投票」提早收尾。'
