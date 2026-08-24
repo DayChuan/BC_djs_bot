@@ -1,33 +1,31 @@
-import {Collection, REST, Routes} from 'discord.js'
-import fg, { async } from 'fast-glob'      //讀取檔案用的套件
+import {Collection} from 'discord.js'
+import fg from 'fast-glob'      //讀取檔案用的套件
+import path from 'node:path'
+import {fileURLToPath} from 'node:url'
 import {useAppStroe} from '@/store/app'
-import config from '@/config'
 import logger from '@/core/logger'
 
-//送API請求給discord官方
-const updateSlashCommands = async(commands, GUILD_ID) =>{
-    const rest = new REST({version:10}).setToken(process.env.TOKEN)
-    const result = await rest.put(
-        //discord.js的function 目的是簡化API請求流程
-        //也可以找不同的Function來用
-        Routes.applicationGuildCommands(
-            config.applicationId,
-            GUILD_ID
-        ),
-        {
-            body: commands,
-        },
-    )
-    // console.log(result)
-}
-
+//專案根目錄。原本用相對路徑 './src/**' 掃檔，等於把「從哪個目錄啟動」
+//當成隱含前提 —— 從別的位置啟動就靜默掃不到任何檔案，
+//bot 照常上線但一個指令、一個事件都沒有(ISSUES.md M-05)。
+//絕對路徑的寫法照抄 src/core/pollStore.js。
+//fast-glob 即使在 Windows 上也只吃正斜線，所以要把分隔符換掉；
+//編輯機是 Windows、執行環境是 FreeBSD，漏掉這步會在其中一邊掃不到檔。
+//用 split(path.sep).join('/') 而不是正規表達式，是為了避開反斜線的跳脫 ——
+//用腳本改檔時轉義被多吃一層、字串或 regex 沒有結束，2026-08-18 踩過(見 CLAUDE.md)。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+    .split(path.sep)
+    .join('/')
 
 //讀寫資料夾檔案
 //這裡目的是如果後續新增了command不用一直進這個檔案維護command數量與名稱跟discord請求
 //直接看我有幾個資料夾檔案的檔名來調整即可(有用到不同的插件ex:fast-glob)
-export const loadCommands = async() => {
-    const appStroe = useAppStroe()
-    const files = await fg('./src/commands/**/index.js')
+//
+//這個函式是純資料來源：不碰 store、不碰 REST、不寫 log，
+//所以部署腳本(src/scripts/deploy-commands.js)可以直接用它，
+//不必先把 Pinia 初始化起來。
+export const collectCommands = async() => {
+    const files = await fg(`${ROOT}/src/commands/**/index.js`, {absolute: true})
     const commands = []
     const actions = new Collection()
     for(const file of files){
@@ -35,38 +33,31 @@ export const loadCommands = async() => {
         commands.push(cmd.command)
         actions.set(cmd.command.name, cmd.action)
     }
-    //對照表要在打 REST **之前**就建好。
-    //原本順序是相反的，於是任何一個 guildId 註冊失敗(例如填錯 id、bot 不在該伺服器、
-    //吃到 429)，整個 loadCommands() 就會 reject，commandActionMap 永遠不會被設定 ——
-    //結果是 bot 連線正常、Discord 上的指令也還在，但按下去全部沒反應。
-    //而且 main.js 沒有 await 這個函式，錯誤只會變成一則 unhandledRejection。
-    //已經在 2026-08-18 用另一種方式踩過一次(commit 6400626)，不要再來一次。
+    return {commands, actions}
+}
+
+//建立「指令名稱 → 處理函式」的對照表，供 interactionCreate 分派用。
+//
+//這裡**不再向 Discord 註冊指令**。註冊已經拆成獨立的部署步驟(yarn deploy)，
+//理由是 2026-08-18 的事故：指令檔有語法錯誤時 bot 照常連線、ready 也正常，
+//只有指令表默默建不起來，錯誤被吞成一則 unhandledRejection，
+//要等使用者發現指令消失才知道出事。拆開之後這種錯會在部署當下就爆出來。
+//順帶把每次重啟都無條件打的 PUT applicationGuildCommands 一併省掉
+//(正式站兩個伺服器 = 兩倍呼叫，crash loop 時還會反覆打同一個端點吃 429)。
+export const loadCommands = async() => {
+    const appStroe = useAppStroe()
+    const {commands, actions} = await collectCommands()
     appStroe.commandActionMap = actions
     //供 /help 列出指令清單用
     appStroe.commandList = commands
 
-    // 2023_1129 突然想到一次註冊多個伺服器
-    // 2026_0817 伺服器清單改由 src/config/environments/<環境>.js 提供
-    //一個伺服器註冊失敗不影響其他伺服器，也不影響已經註冊上去的指令。
-    for(const guildId of config.guildIds){
-        try{
-            await updateSlashCommands(commands, guildId)
-        }
-        catch(e){
-            logger.error(
-                `指令註冊失敗 guild=${guildId}(其他伺服器不受影響，` +
-                `該伺服器維持上一次註冊的內容)：`, e
-            )
-        }
-    }
-
-    logger.info(`指令載入完成：${commands.length} 個指令，${config.guildIds.length} 個伺服器`)
+    logger.info(`指令載入完成：${commands.length} 個指令`)
 }
 
 export const loadEvents = async() => {
     const appStroe = useAppStroe()
     const client = appStroe.client
-    const files = await fg('./src/events/**/index.js')
+    const files = await fg(`${ROOT}/src/events/**/index.js`, {absolute: true})
     for(const file of files){
         const eventFile = await import(file)
 

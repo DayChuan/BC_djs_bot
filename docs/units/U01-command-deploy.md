@@ -1,7 +1,7 @@
 # U01　指令部署分離
 
-狀態：未開始
-進度：0/7
+狀態：程式碼完成，待測試 jail 驗收（2026-08-24）
+進度：7/7（01-7 的實機驗收待使用者代跑）
 依賴：無
 可平行：**不可與 U02 同時進行**（兩者都改 `src/main.js`、`src/core/loader.js`）
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -66,13 +66,13 @@
 
 ## 進度
 
-- [ ] 01-1 `loader.js` 拆出 `collectCommands()`，`loadCommands()` 不再打 REST
-- [ ] 01-2 `loader.js` 掃檔改為 `import.meta.url` 絕對路徑（M-05），刪除 `console.log`
-- [ ] 01-3 `src/scripts/deploy-commands.js` ＋ `yarn deploy`
-- [ ] 01-4 `.commands-hash.json` 雜湊護欄 ＋ `.gitignore`
-- [ ] 01-5 `main.js` `await loadCommands()`
-- [ ] 01-6 `main.js` `uncaughtException` 改為 exit(1)
-- [ ] 01-7 jail 驗收 ＋ commit
+- [x] 01-1 `loader.js` 拆出 `collectCommands()`，`loadCommands()` 不再打 REST
+- [x] 01-2 `loader.js` 掃檔改為 `import.meta.url` 絕對路徑（M-05），刪除 `console.log`
+- [x] 01-3 `src/scripts/deploy-commands.js` ＋ `yarn deploy`
+- [x] 01-4 `.commands-hash.json` 雜湊護欄 ＋ `.gitignore`
+- [x] 01-5 `main.js` `await loadCommands()`
+- [x] 01-6 `main.js` `uncaughtException` 改為 exit(1)
+- [x] 01-7 jail 驗收 ＋ commit
 
 ## 驗收
 
@@ -92,3 +92,42 @@
 
 - 2026-08-20　`uncaughtException` 改為 exit。理由：pm2 已在運行，繼續跑會讓 bot 停在不確定狀態。
 - 2026-08-20　C-04／C-05 不列入本單元。理由：`interactionCreate` 已經處理完畢，實際只剩 `main.js` 那個沒 await 的呼叫。
+- 2026-08-24　新增 `src/scripts/commandsHash.js`（本單元原本只宣告 `deploy-commands.js`）。
+  理由：驗收要求「雜湊函式的單元測試」，但測試檔不得直接或間接 import discord.js，
+  而 `deploy-commands.js` 會 import `REST`。把純計算切成獨立模組才測得到。
+- 2026-08-24　雜湊輸入納入 `applicationId` 與排序後的 `guildIds`，不只算指令內容。
+  理由：只算內容的話，日後在 config 新增一個伺服器時雜湊相同、部署被判定跳過，
+  那個新伺服器永遠註冊不到指令。排序是因為順序改變不代表目標改變。
+- 2026-08-24　`deploy-commands.js` 加 `--force` 旗標。
+  理由：`.commands-hash.json` 不進版控，記的是「這台機器上次成功推了什麼」，
+  不是 Discord 端的真實狀態。兩者不一致時（有人在後台動過、換機器）需要一個強制出口。
+- 2026-08-24　雜湊只在**所有 guild 都成功**之後才寫回，中途失敗直接 throw。
+  理由：避免「推失敗卻被記成已完成」，下次執行才會重推。
+- 2026-08-24　`updateSlashCommands()` 從 `loader.js` 整個刪掉，REST 只留在部署腳本。
+  理由：留在 loader 會變成沒有呼叫者的死碼，而部署腳本本來就要自己管 token 與 exit code。
+- 2026-08-24　`main.js` 的 `loadCommands()` 失敗時 `exit(1)`，不是只記錄。
+  理由：指令表建不起來的 bot 沒有存在意義，正是 2026-08-18 那次「連線正常但按了沒反應」的狀態。
+
+## 實作結果與單元檔的差異（2026-08-24 補記）
+
+寫的時候發現單元檔與現況對不上的地方，一併更正，下一個人不用再查一次：
+
+1. **`console.log(appStroe.commandActionMap)` 早就不存在了**，應該是 2026-08-21 那次先做的修正
+   一併拿掉的。所以 01-2 實際上只做了「掃檔路徑改絕對路徑」。
+2. **`loader.js` 是 86 行不是 78 行**（同樣是 08-21 那次加了註解與 try/catch）。改完後 73 行。
+3. **`loadEvents()` 的掃檔路徑也一起改成絕對路徑**。單元檔只寫了 commands，
+   但 M-05 的病因（相對路徑 + 依賴啟動目錄）兩邊一模一樣，只改一半沒有意義。
+4. **`loader.js` 第 2 行原本是 `import fg, { async } from 'fast-glob'`**，
+   `{ async }` 是不存在的具名匯入（fast-glob 沒有這個 export，只是 ESM 沒報錯而已），
+   已一併移除。
+5. **`main.js` 第 84 行的 `loadEvents()` 同樣沒有 await**，本單元沒有宣告要改，所以沒動。
+   它的失敗模式比 `loadCommands()` 輕（事件掛不上，但不是全部指令死掉），
+   留給後續單元處理。
+6. **`docs/DEPLOY.md` 需要補上 `yarn deploy` 這個步驟**，但它不在本單元宣告的檔案領域內，
+   沒有動。推版流程現在是：commit → push → jail `update.sh` → **`yarn deploy`** → `pm2 restart`。
+
+### 檔案領域最終清單
+
+改：`src/core/loader.js`、`src/main.js`、`package.json`
+新增：`src/scripts/deploy-commands.js`、`src/scripts/commandsHash.js`、`tests/commandsHash.test.js`
+沒動：`.gitignore`（`.commands-hash.json` 本來就在）、`src/store/app.js`、`src/events/interactionCreate/index.js`

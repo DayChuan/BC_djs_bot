@@ -8,14 +8,19 @@ import logger from '@/core/logger'
 //import { token } = require('./config.json');      // 官網範例檔案
 
 ///////////////////// 行程層級的錯誤攔截(Phase 1-A) /////////////////////
-// 觀察期的策略：只記錄、不終止行程，先把錯誤種類收集完整。
-// Phase 6-E 上了 pm2 之後，uncaughtException 會改為「記錄後 exit」交給 pm2 重啟。
+// unhandledRejection 維持「只記錄、不終止」：這類錯誤絕大多數是單一互動失敗
+// (例如某次 Discord API 呼叫沒 await)，整個 bot 不該因此下線。
 process.on('unhandledRejection', (reason) => {
     logger.error('unhandledRejection(未處理的 Promise rejection)：', reason)
 })
 
+// uncaughtException 改為「記錄後 exit(1)」交給 pm2 重啟。
+// 繼續跑是當初還沒有 supervisor 時的權宜之計 —— 例外已經逃出所有 try/catch，
+// 此時行程的狀態是不確定的，留著只會讓 bot 停在半死不活、看起來還在線上的狀態。
+// 兩個 jail 現在都由 pm2 管(docs/ENVIRONMENTS.md)，退出才是正確的處置。
 process.on('uncaughtException', (error) => {
-    logger.error('uncaughtException(未攔截的例外)：', error)
+    logger.error('uncaughtException(未攔截的例外)，行程即將結束交由 pm2 重啟：', error)
+    process.exit(1)
 })
 
 // 被訊號終止時要留下紀錄。
@@ -38,7 +43,17 @@ dotenv.config();
 
 logger.info(`=== bot 啟動 === pid=${process.pid} node=${process.version} cwd=${process.cwd()}`)
 
-loadCommands()
+// 一定要 await。原本沒有 await，loadCommands() 失敗時只會變成一則
+// unhandledRejection，bot 照常連線、ready 也正常，但指令表是空的 ——
+// 使用者按下任何指令都沒反應，畫面上完全看不出原因(2026-08-18 的事故)。
+// 指令表建不起來的 bot 沒有存在意義，直接 exit(1) 讓 pm2 重啟。
+try{
+    await loadCommands()
+}
+catch(error){
+    logger.error('loadCommands 失敗，指令表建不起來，行程結束：', error)
+    process.exit(1)
+}
 
 // Create a new client instance
 const client = new Client({

@@ -2,6 +2,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite-node src/main.js",
+    "deploy": "vite-node src/scripts/deploy-commands.js",
     "test": "vitest run"
   },
   "dependencies": {
