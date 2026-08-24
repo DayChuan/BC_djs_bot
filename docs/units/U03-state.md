@@ -1,12 +1,12 @@
 # U03　跨重啟狀態 `state.js`
 
-狀態：未開始
+狀態：停擺後復工（`src/core/state.js` 已有一份未 commit 的半成品）
 進度：0/5
 依賴：無
 可平行：可（新檔為主，只在 `src/events/ready/index.js` 加一行）
-分支：`unit/U03-state`（**已經開了就做完再合併回 `test`；之後的單元不要再開分支**，
-見 CLAUDE.md 的單元制第 2 條。合併時用 `git checkout test && git merge --no-ff unit/U03-state`，
-但要先確認沒有別條線正在同一個工作目錄裡改檔）
+分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
+　　　舊的 `unit/U03-state` 分支已經落後 `test` 15 個 commit，**不要用它、不要 checkout**，
+　　　等這個單元做完再由使用者刪掉即可。
 來源：原 PLAN.md Phase 2-C／2-D
 
 ---
@@ -66,6 +66,27 @@ updateState(section, mutator)  // 讀→改→寫，走佇列
 **開機還原不放在 `state.js` 裡**。`state.js` 只管存取，「哪些狀態需要重掛排程」由各功能自己在 `ready` 事件註冊。理由是 `state.js` 一旦認識了業務語意，U04 與 U05 就得共同維護同一個檔案。
 
 ---
+
+## 復工前先看：工作目錄裡有一份未 commit 的半成品
+
+`src/core/state.js`（104 行）已經存在，但**從來沒有 commit 過**，
+是這個單元第一次開工時寫到一半就停擺的。復工時**接著它做，不要重寫**——
+它的取捨已經跟本單元的設計對齊了，重寫等於把同樣的判斷再做一次。
+
+它目前的狀態：
+
+| 項目 | 狀況 |
+|---|---|
+| `dataDir()` / `stateFile()` | 已完成。路徑在呼叫時才解析，測試可用 `STATE_DATA_DIR` 指到暫存資料夾 |
+| `readJson()` / `writeJson()` | 已完成。暫存檔 ＋ rename 的原子寫入 |
+| 佇列 `enqueue()` | 已完成，**整份檔案共用一條**（不是像 `pollStore` 一場一條）。註解裡寫了理由：所有 section 住在同一個檔案、每次寫入都要重寫整份，分多條佇列會讓兩段的「讀→改→寫」交錯，後寫的蓋掉先寫的 |
+| `getState` / `setState` / `updateState` | 已完成 |
+| **壞檔備份（03-2）** | **未完成**。`readJson()` 的註解明說「先讓它照原樣往外丟」，要補成 `pollStore.readJson()` 那樣：`ENOENT` 回 null、壞檔備份成 `.broken-<時間>` 再回 null |
+| **`ready` 掛鉤（03-3）** | **未完成**，`src/events/ready/index.js` 完全沒碰過 |
+| **測試（03-4）** | **未完成**，`tests/state.test.js` 不存在 |
+
+所以實際上 03-1 幾乎做完了，**要做的是 03-2 到 03-5**。第一步請先讀完那個檔案，
+把「哪些已經有、哪些還沒有」講給我聽，再開始動手。
 
 ## 進度
 
