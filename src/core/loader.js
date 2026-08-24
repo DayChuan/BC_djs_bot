@@ -2,7 +2,7 @@ import {Collection} from 'discord.js'
 import fg from 'fast-glob'      //讀取檔案用的套件
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {useAppStroe} from '@/store/app'
+import {appStore} from '@/store/app'
 import logger from '@/core/logger'
 
 //專案根目錄。原本用相對路徑 './src/**' 掃檔，等於把「從哪個目錄啟動」
@@ -22,8 +22,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 //直接看我有幾個資料夾檔案的檔名來調整即可(有用到不同的插件ex:fast-glob)
 //
 //這個函式是純資料來源：不碰 store、不碰 REST、不寫 log，
-//所以部署腳本(src/scripts/deploy-commands.js)可以直接用它，
-//不必先把 Pinia 初始化起來。
+//所以部署腳本(src/scripts/deploy-commands.js)可以直接用它。
 export const collectCommands = async() => {
     const files = await fg(`${ROOT}/src/commands/**/index.js`, {absolute: true})
     const commands = []
@@ -45,18 +44,16 @@ export const collectCommands = async() => {
 //順帶把每次重啟都無條件打的 PUT applicationGuildCommands 一併省掉
 //(正式站兩個伺服器 = 兩倍呼叫，crash loop 時還會反覆打同一個端點吃 429)。
 export const loadCommands = async() => {
-    const appStroe = useAppStroe()
     const {commands, actions} = await collectCommands()
-    appStroe.commandActionMap = actions
+    appStore.commandActionMap = actions
     //供 /help 列出指令清單用
-    appStroe.commandList = commands
+    appStore.commandList = commands
 
     logger.info(`指令載入完成：${commands.length} 個指令`)
 }
 
 export const loadEvents = async() => {
-    const appStroe = useAppStroe()
-    const client = appStroe.client
+    const client = appStore.client
     const files = await fg(`${ROOT}/src/events/**/index.js`, {absolute: true})
     for(const file of files){
         const eventFile = await import(file)

@@ -1,9 +1,8 @@
 // Require the necessary discord.js classes
-import { Client, Events, GatewayIntentBits, Message, Partials} from 'discord.js'
+import { Client, GatewayIntentBits, Partials} from 'discord.js'
 import dotenv from 'dotenv'
-import vueInit from '@/core/vue'
 import {loadCommands, loadEvents} from '@/core/loader'
-import {useAppStroe} from '@/store/app'
+import {appStore} from '@/store/app'
 import logger from '@/core/logger'
 //import { token } = require('./config.json');      // 官網範例檔案
 
@@ -38,7 +37,6 @@ process.on('exit', (code) => {
 })
 ///////////////////////////////////////////////////////////////////////
 
-vueInit();
 dotenv.config();
 
 logger.info(`=== bot 啟動 === pid=${process.pid} node=${process.version} cwd=${process.cwd()}`)
@@ -74,7 +72,6 @@ const client = new Client({
         Partials.Reaction
      ],
 });
-const appStore = useAppStroe()
 appStore.client = client
 
 ///////////////////// client 層級的錯誤攔截(Phase 1-A) /////////////////////

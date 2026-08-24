@@ -1,7 +1,7 @@
 # U02　拔掉 Vue／Pinia
 
-狀態：未開始
-進度：0/5
+狀態：待 jail 驗收
+進度：5/5（`yarn.lock` 待補）
 依賴：U01（同樣改 `main.js` 與 `loader.js`，等 U01 併回 `test` 再開工）
 可平行：**不可與 U01 同時進行**
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -63,11 +63,11 @@ grep -rn "useAppStroe\|commandsActionMap\|core/vue" src tests
 
 ## 進度
 
-- [ ] 02-1 `src/store/app.js` 改為一般單例物件
-- [ ] 02-2 六個引用點全部改掉，刪除 `src/core/vue.js`
-- [ ] 02-3 `package.json` 移除 `vue`、`pinia`
-- [ ] 02-4 `moduleLayout.test.js` 加上禁止 import vue/pinia 的靜態檢查
-- [ ] 02-5 jail 驗收 ＋ commit
+- [x] 02-1 `src/store/app.js` 改為一般單例物件
+- [x] 02-2 四個引用點全部改掉，刪除 `src/core/vue.js`
+- [x] 02-3 `package.json` 移除 `vue`、`pinia`
+- [x] 02-4 `moduleLayout.test.js` 加上禁止 import vue/pinia 的靜態檢查
+- [ ] 02-5 jail 驗收 ＋ 補 `yarn.lock`（程式碼已 commit）
 
 ## 驗收
 
@@ -86,3 +86,13 @@ grep -rn "useAppStroe\|commandsActionMap\|core/vue" src tests
 ## 決策紀錄
 
 - 2026-08-20　排在 U01 之後而非之前。理由：兩者都改 `main.js` 與 `loader.js`，平行必衝突；U01 是修實際發生過的事故，優先。
+- 2026-08-24　實際引用點是**四個**消費端（`main.js` / `loader.js` / `interactionCreate` / `help`）＋ `app.js` 自己 ＋ 刪掉的 `vue.js`。上面「相關檔案」表的行號全部對不上，因為 U01 已經動過 `main.js` 與 `loader.js`；實際位置是 `main.js` 第 4/6/41/77 行、`loader.js` 第 5/48/50/52/58/59 行。
+- 2026-08-24　`commandsActionMap` 這個拼錯只出現在 `app.js` 的宣告裡，四個消費端一直都寫對成 `commandActionMap`。所以改名對執行期**沒有任何影響**，純粹是讓宣告與實際使用對齊。
+- 2026-08-24　grep 驗收指令要多掃一個 `appStroe`。`loader.js` / `interactionCreate` / `help` 裡的區域變數名也是拼錯的（`const appStroe = useAppStroe()`），原本的指令抓不到它。實際用的是 `grep -rn "useAppStroe\|commandsActionMap\|core/vue\|appStroe" src tests`，已歸零。
+- 2026-08-24　`main.js` 第 77 行的 `const appStore = useAppStroe()` 必須**整行刪除**，不能只改右側。改成 `import {appStore}` 之後留著會撞名，`SyntaxError: Identifier 'appStore' has already been declared`。
+- 2026-08-24　`loader.js` 第 26 行的註解原本寫「不必先把 Pinia 初始化起來」，理由隨 Pinia 一起消失，改寫為「不碰 store」。
+- 2026-08-24　順手刪掉 `main.js` 第 2 行沒用到的 `Events` 與 `Message`。已確認全檔沒有使用：`Message` 只出現在 `Partials.Message` 與 `GatewayIntentBits.GuildMessages` 等處，不是被 import 的那個 class。
+- 2026-08-24　`vite.config.js` 沒有掛 vue plugin，`src/scripts/deploy-commands.js` 走 `collectCommands()` 不碰 store —— 兩者都不用改。
+- 2026-08-24　**`yarn.lock` 分兩次處理**。它有進版控，但編輯目錄在 NAS 上禁止執行 process，我無法跑 `yarn install` 重算 lock；而 jail 端 `update.sh` 是 `git reset --hard`，在 jail 裡重算的 lock 下次 pull 就被沖掉。作法：先只 commit `package.json`，jail 驗收時跑 `yarn install`，再從 `\\fongxiang.duckdns.org\mnt\iocage\jails\DiscordBot_test\root\root\BC_djs_bot\yarn.lock` 讀回真正由 yarn 產生的 lock，複製回編輯目錄補一次 commit。手改 lock 不可行。
+- 2026-08-24　新增的靜態檢查只認 `from 'vue'` 這種字面寫法，抓不到 `import('vue')`。專案全是靜態 ESM import，為動態 import 去寫 parser 不值得。
+- 2026-08-24　單例改成 module-level 物件後，**沒有機制阻止誰在啟動前就讀它**（原本 `useAppStroe()` 至少要求 Pinia 已初始化）。實際寫入／讀取的順序沒變，且兩個消費端本來就有「map 還沒建好」的防護（ISSUES.md 的 C-04），所以不加 getter/setter。

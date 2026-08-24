@@ -1,5 +1,5 @@
 import {Events, MessageFlags} from 'discord.js'
-import {useAppStroe} from '@/store/app'
+import {appStore} from '@/store/app'
 import logger from '@/core/logger'
 import {PANEL_BUTTON_ID, PANEL_SELECT_ID, buildMemberPanel} from '@/core/rolePanel'
 import {syncRoles} from '@/core/roleGrant'
@@ -47,8 +47,7 @@ const safeRespond = async(interaction, content) => {
 }
 
 const handleChatInputCommand = async(interaction) => {
-    const appStroe = useAppStroe()
-    const map = appStroe.commandActionMap
+    const map = appStore.commandActionMap
 
     //開機競態：loadCommands() 還沒把 map 填好就有人下指令(ISSUES.md 的 C-04)。
     //原本會對 null 呼叫 .get() 然後終止行程。

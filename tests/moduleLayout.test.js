@@ -79,6 +79,24 @@ describe('測試檔不得碰到 discord.js', () => {
     )
 })
 
+describe('src 不得 import vue 或 pinia', () => {
+    /**
+     * U02 把全域容器從 Pinia store 換成一般的 ES module 單例物件，
+     * vue 與 pinia 已從 package.json 移除 —— 寫回去的話 jail 裡是
+     * 「找不到模組」而不是語法錯誤，症狀同樣是 bot 上線但指令表建不起來。
+     *
+     * 只認 from 'vue' 這種靜態寫法，抓不到 import('vue')。
+     * 專案全是靜態 ESM import，為動態 import 去寫 parser 不值得。
+     */
+    const FORBIDDEN = ['vue', 'pinia']
+
+    it.each(sourceFiles)('%s', (file) => {
+        const content = read(file)
+        const found = FORBIDDEN.filter((name) => content.includes(`from '${name}'`))
+        expect(found, `${relative(file)} 匯入了 ${found.join('、')}`).toEqual([])
+    })
+})
+
 describe('原始碼的引號與括號必須平衡', () => {
     /**
      * 2026-08-18 發生兩次：用腳本改檔時字串裡的換行轉義被多吃一層，

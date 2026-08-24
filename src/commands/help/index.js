@@ -1,5 +1,5 @@
 import {MessageFlags, SlashCommandBuilder} from 'discord.js'
-import {useAppStroe} from '@/store/app'
+import {appStore} from '@/store/app'
 import {buildHelpText} from '@/core/helpText'
 import logger from '@/core/logger'
 
@@ -10,8 +10,7 @@ export const command = new SlashCommandBuilder()
     .setDescription('列出你目前可以使用的指令')
 
 export const action = async(ctx) => {
-    const appStroe = useAppStroe()
-    const commands = appStroe.commandList
+    const commands = appStore.commandList
 
     //跟 interactionCreate 的開機競態同一個成因(ISSUES.md 的 C-04)：
     //loadCommands() 還沒跑完就有人下指令。
