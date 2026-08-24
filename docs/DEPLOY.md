@@ -69,13 +69,27 @@ tail -30 logs/$(date +%Y-%m-%d).log       # 有 Ready! 且沒有 unhandledReject
 pm2 logs discord-bot --lines 50           # 或看 pm2 這邊
 ```
 
-**U01 完成後**，指令有增減時要多跑一步（否則 Discord 端看不到新指令）：
+### 指令有增減時一定要跑 `yarn deploy`（U01 之後的新規矩）
 
 ```sh
 cd /root/BC_djs_bot_test && yarn deploy
 ```
 
-內容沒變會自己印「內容未變、跳過」，所以每次部署都跑也沒關係。
+U01 把「向 Discord 註冊指令」從 bot 啟動流程拆出來了，**bot 重啟不會再自動註冊**。
+新增、刪除、改名、改參數、改權限之後沒跑這一步，Discord 端就看不到變更——
+而且 bot 完全正常，log 也乾淨，只有指令對不上，很難聯想到是漏了這步。
+
+內容沒變時它會印「內容未變、跳過」而且不發任何 REST，所以**每次部署都跑也沒關係**。
+懷疑 Discord 端跟本地的雜湊檔不一致時，用 `yarn deploy --force` 強制推。
+
+**建議把它加進 jail 的 `/root/update.sh`**，放在 `yarn install` 之後、`pm2 restart` 之前：
+
+```sh
+cd /root/BC_djs_bot_test && yarn deploy
+pm2 restart discord-bot --update-env
+```
+
+這樣「忘記跑 deploy」這個新的失敗模式就不存在了。
 
 再到**測試 Discord 伺服器**做該單元檔裡列的實機驗收。
 
@@ -94,7 +108,7 @@ cd /root/BC_djs_bot
 git log -1 --oneline          # 先記下目前的 commit，回滾要用
 git pull origin main
 yarn install                  # 相依有變動時必須跑
-yarn deploy                   # U01 完成後才有；指令有增減時必跑
+yarn deploy                   # 指令有增減時必跑；沒變會自己跳過，每次都跑也沒關係
 pm2 restart bc-djs-bot
 tail -30 logs/$(date +%Y-%m-%d).log
 ```
@@ -107,7 +121,7 @@ tail -30 logs/$(date +%Y-%m-%d).log
 cd /root/BC_djs_bot
 git reset --hard <先前的 commit>
 yarn install
-yarn deploy                   # 指令定義有變過的話要一起退回去
+yarn deploy                   # 指令定義有變過的話要一起退回去（雜湊會不一致，會真的重推）
 pm2 restart bc-djs-bot
 ```
 
