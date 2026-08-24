@@ -1,6 +1,5 @@
 import {ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder} from 'discord.js'
 import {SKILLS, WARN_DISPLAY_SECONDS} from '@/config/horntail'
-import {formatRemaining, remainingSeconds} from '@/core/timerState'
 
 //customId 的格式是 ht:<動作>:<頻道id>[:<招式key>]。
 //  ht:t:<channelId>:<skillKey>   切換某個招式(在跑就停、沒跑就開)
@@ -44,11 +43,24 @@ export const parseHorntailCustomId = (raw) => {
 //招式本身的顏色(紅/黃/藍)由 emoji 表達 —— 按鈕沒有黃色，用按鈕色會湊不齊。
 const styleOf = (timer) => (timer.running ? ButtonStyle.Success : ButtonStyle.Secondary)
 
-const lineOf = (timer, now) => {
-    const value = timer.running
-        ? `\`${formatRemaining(remainingSeconds(timer, now))}\``
-        : `${timer.seconds} 秒（未開始）`
-    return `${timer.emoji}　**${timer.label}**　${value}`
+/**
+ * 倒數一律用 Discord 的相對時間戳 `<t:秒:R>`（2026-08-24 改）。
+ *
+ * 那是**看的人自己的用戶端在算**，每秒自己跳，bot 完全不必編輯訊息。
+ * 原本是 bot 每 2 秒重寫一次數字，網路一不穩（8/22、8/23 都發生過連線逾時與
+ * TLS 驗證失敗）畫面就整個卡住，而卡住的當下正是最需要看秒數的時候。
+ * 改成用戶端算之後，就算 bot 完全連不上 Discord，大家螢幕上的倒數還是準的。
+ *
+ * 後面補一個 `<t:秒:T>` 的絕對時間，是為了讓人一眼看出「幾點幾分幾秒結束」——
+ * 相對時間在超過一分鐘時只會顯示「2 分鐘後」，不夠精確。
+ */
+const lineOf = (timer) => {
+    if(!timer.running || timer.endsAt === null){
+        return `${timer.emoji}　**${timer.label}**　${timer.seconds} 秒（未開始）`
+    }
+
+    const at = Math.floor(timer.endsAt / 1000)
+    return `${timer.emoji}　**${timer.label}**　<t:${at}:R>（<t:${at}:T>）`
 }
 
 //面板上的計時器順序固定照設定檔的 SKILLS，不要用 Object.values 的順序去猜。
@@ -60,13 +72,15 @@ const timersOf = (panel) => SKILLS.map((skill) => panel.timers[skill.key]).filte
  *
  * ended = true 時移除所有按鈕（總時限到、閒置太久、或被新面板取代）。
  */
+//now 仍然留在參數裡但已經用不到：倒數改由用戶端的時間戳自己算之後，
+//這裡不需要知道「現在幾點」。保留參數是為了不動 service 那三個呼叫點。
 export const buildPanelMessage = (panel, now, {ended = false} = {}) => {
     const timers = timersOf(panel)
 
     const embed = new EmbedBuilder()
         .setColor(ended ? COLOR_ENDED : COLOR_ACTIVE)
         .setTitle(ended ? '🐉 暗黑龍王計時器（面板已結束）' : '🐉 暗黑龍王計時器')
-        .setDescription(timers.map((timer) => lineOf(timer, now)).join('\n'))
+        .setDescription(timers.map((timer) => lineOf(timer)).join('\n'))
 
     if(ended){
         embed.setFooter({text: '這個面板已經結束，需要的話重新輸入 /horntail'})
@@ -77,7 +91,7 @@ export const buildPanelMessage = (panel, now, {ended = false} = {}) => {
     //沒寫的話，聽不到的人會以為功能壞了。
     embed.setFooter({
         text: `剩 ${WARN_DISPLAY_SECONDS} 秒語音提醒 · 要在 Discord 設定開啟「文字轉語音」才聽得到`
-            + '\n按一次開始、再按一次停止 · 歸零後自動接下一輪'
+            + '\n按一次開始、再按一次從頭重算 · 歸零後自動接下一輪'
             + '\n用完請按「結束面板」收起來',
     })
 
@@ -85,9 +99,10 @@ export const buildPanelMessage = (panel, now, {ended = false} = {}) => {
         timers.map((timer) => new ButtonBuilder()
             .setCustomId(customId('t', panel.channelId, timer.key))
             .setEmoji(timer.emoji)
-            .setLabel(timer.running
-                ? `${timer.label} ${formatRemaining(remainingSeconds(timer, now))}`
-                : timer.label)
+            //按鈕標籤不能放時間戳（Discord 只在訊息內容與 embed 裡算），
+            //所以這裡只放招式名。秒數在 embed 由用戶端自己跳，
+            //硬要放進按鈕就等於逼 bot 每兩秒重編一次整則訊息。
+            .setLabel(timer.running ? `${timer.label}（計時中）` : timer.label)
             .setStyle(styleOf(timer)))
     )
 

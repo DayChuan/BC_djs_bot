@@ -10,7 +10,7 @@ import {
     stopAll,
     stopTimer,
     tick,
-    toggleTimer,
+    pressTimer,
     touch,
 } from '@/core/timerState'
 import {
@@ -178,24 +178,27 @@ describe('停止與重新開始', () => {
         expect(tick(panel, at(100 + total - WARN_SECONDS)).warned).toEqual(['fire'])
     })
 
-    it('toggle 在跑就停、沒跑就重新開始', () => {
+    it('按一下開始，再按一下從頭重算（不是停止）', () => {
         const panel = createPanel('channel-1', T0)
 
-        toggleTimer(panel, 'fire', T0)
+        pressTimer(panel, 'fire', T0)
         expect(panel.timers.fire.running).toBe(true)
 
-        toggleTimer(panel, 'fire', at(10))
-        expect(panel.timers.fire.running).toBe(false)
+        //跑了 10 秒之後再按一次：仍然在跑，而且剩餘秒數回到初始值。
+        //打王遇到 delay 時要的是重新計時，舊語意得按兩次才做得到。
+        pressTimer(panel, 'fire', at(10))
+        expect(panel.timers.fire.running).toBe(true)
+        expect(remainingOf(panel, 'fire', at(10))).toBe(secondsOf('fire'))
 
-        toggleTimer(panel, 'fire', at(20))
-        expect(remainingOf(panel, 'fire', at(20))).toBe(secondsOf('fire'))
+        //重算之後這一輪的提醒也要重來，不能沿用上一輪的 warned
+        expect(panel.timers.fire.warned).toBe(false)
     })
 
     it('認不得的招式 key 回 null，不丟例外', () => {
         const panel = createPanel('channel-1', T0)
 
         expect(startTimer(panel, 'nope', T0)).toBe(null)
-        expect(toggleTimer(panel, 'nope', T0)).toBe(null)
+        expect(pressTimer(panel, 'nope', T0)).toBe(null)
         expect(stopTimer(panel, 'nope')).toBe(null)
         expect(anyRunning(panel)).toBe(false)
     })
@@ -272,8 +275,10 @@ describe('招式設定', () => {
         expect(new Set(SKILLS.map((skill) => skill.key)).size).toBe(SKILLS.length)
     })
 
-    it('實際觸發的秒數比面板上寫的多，那是補 TTS 的開場', () => {
-        expect(WARN_SECONDS).toBeGreaterThan(WARN_DISPLAY_SECONDS)
+    it('實際觸發的秒數不會早於面板上寫的', () => {
+        //2026-08-24 兩者都是 5：發訊者名稱 TTS 唸不出來，原本補的兩秒開場並不存在。
+        //保留兩個常數是為了「之後又需要補償時只改 WARN_SECONDS」。
+        expect(WARN_SECONDS).toBeGreaterThanOrEqual(WARN_DISPLAY_SECONDS)
     })
 
     it('計時器把 voice 與 emoji 帶進狀態，render 不必再回頭查設定檔', () => {

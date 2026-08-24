@@ -10,7 +10,7 @@ import {
     isIdle,
     stopAll,
     tick,
-    toggleTimer,
+    pressTimer,
     touch,
 } from '@/core/timerState'
 
@@ -164,12 +164,16 @@ const tickPanel = (entry, now) => {
     }
 
     //warned / rolled 由狀態機算，這裡只決定要不要發出去。
-    const {warned} = tick(entry.panel, now)
+    const {warned, rolled} = tick(entry.panel, now)
     for(const key of warned) sendWarn(entry, entry.panel.timers[key])
 
-    //都停著而且畫面已經是最新的，就完全不要碰 API。
-    //面板開著沒人用的時候，這個分支讓編輯次數降到零。
-    if(!anyRunning(entry.panel) && !entry.dirty) return
+    //歸零進下一輪 = endsAt 換了，畫面上的時間戳要跟著換，所以要重畫一次。
+    if(rolled.length > 0) entry.dirty = true
+
+    //2026-08-24：倒數改由用戶端自己算之後，「還在跑」不再是編輯的理由 ——
+    //只有狀態真的變了（有人按按鈕、或某一輪歸零）才需要重畫。
+    //編輯次數因此從每分鐘 30 次降到約 4 次，網路不穩時也不再卡住畫面。
+    if(!entry.dirty) return
     if(now - entry.lastEditAt < EDIT_MS) return
 
     flush(entry, now)
@@ -241,17 +245,17 @@ export const openPanel = async (channel) => {
 }
 
 /**
- * 按鈕：切換某個招式。在跑就停、沒跑就從初始秒數重新開始。
+ * 按鈕：按下某個招式。沒在跑就開始，正在跑就**從頭重新計時**（2026-08-24 改）。
  *
  * 這裡不編輯訊息，只把 dirty 立起來讓下一次 tick 一起處理 ——
  * 每個互動各自編輯一次，等於把限流的分母乘上人數。
  * 回 false 代表記憶體裡沒有這個面板（bot 重啟過），呼叫端要回「面板已失效」。
  */
-export const toggleSkill = (channelId, skillKey, now = Date.now()) => {
+export const pressSkill = (channelId, skillKey, now = Date.now()) => {
     const entry = panels.get(channelId)
     if(!entry) return false
 
-    const timer = toggleTimer(entry.panel, skillKey, now)
+    const timer = pressTimer(entry.panel, skillKey, now)
     if(!timer) return false
 
     touch(entry.panel, now)
@@ -311,6 +315,6 @@ export default {
     isGmMember,
     openPanel,
     closePanel,
-    toggleSkill,
+    pressSkill,
     stopAllSkills,
 }

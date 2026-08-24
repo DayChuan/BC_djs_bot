@@ -61,12 +61,16 @@ export const stopTimer = (panel, key) => {
     return timer
 }
 
-//按鈕的語意：在跑就停、沒跑就從初始秒數重新開始。
-export const toggleTimer = (panel, key, now) => {
-    const timer = getTimer(panel, key)
-    if(!timer) return null
-    return timer.running ? stopTimer(panel, key) : startTimer(panel, key, now)
-}
+/**
+ * 按鈕的語意（2026-08-24 改）：**按一下開始，再按一下從頭重新計時**。
+ *
+ * 原本是「在跑就停」，但實際打王時遇到延遲或遊戲本身 delay，
+ * 使用者要的是「重新計時」——舊語意得先按一次停、再按一次開，
+ * 而每一次按鈕都要等一輪 Discord 互動往返，現場根本來不及。
+ *
+ * 要停下來改用面板上的「全部停止」。
+ */
+export const pressTimer = (panel, key, now) => startTimer(panel, key, now)
 
 export const stopAll = (panel) => {
     for(const key of Object.keys(panel.timers)) stopTimer(panel, key)
@@ -134,7 +138,7 @@ export default {
     remainingSeconds,
     startTimer,
     stopTimer,
-    toggleTimer,
+    pressTimer,
     stopAll,
     touch,
     tick,

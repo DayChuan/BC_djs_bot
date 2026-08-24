@@ -6,7 +6,7 @@ import {syncRoles} from '@/core/roleGrant'
 import {getRoleIds} from '@/core/selfRoles'
 import {parsePollCustomId} from '@/core/pollRender'
 import {PANEL_DENY_TEXT, PANEL_GONE_TEXT, parseHorntailCustomId} from '@/core/timerRender'
-import {closePanel, hasPanel, isGmMember, stopAllSkills, toggleSkill} from '@/core/timerService'
+import {closePanel, hasPanel, isGmMember, pressSkill, stopAllSkills} from '@/core/timerService'
 import {refreshEphemeral, trackEphemeral} from '@/core/ephemeralTracker'
 import {
     checkQuickEnd,
@@ -241,7 +241,7 @@ const handleHorntail = async(interaction, parsed) => {
     if(sameChannel){
         ok = parsed.kind === 'stop'
             ? stopAllSkills(parsed.channelId)
-            : toggleSkill(parsed.channelId, parsed.skillKey)
+            : pressSkill(parsed.channelId, parsed.skillKey)
     }
 
     //記憶體裡沒有這個面板 = bot 重啟過。訊息與按鈕都還在，但狀態已經沒了。
