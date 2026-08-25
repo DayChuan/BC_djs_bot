@@ -79,7 +79,7 @@ export const buildPanelMessage = (panel, now, {ended = false} = {}) => {
 
     const embed = new EmbedBuilder()
         .setColor(ended ? COLOR_ENDED : COLOR_ACTIVE)
-        .setTitle(ended ? '🐉 黯黑龍王計時器（面板已結束）' : '🐉 黯黑龍王計時器')
+        .setTitle(ended ? '🐉 闇黑龍王計時器（面板已結束）' : '🐉 闇黑龍王計時器')
         .setDescription(timers.map((timer) => lineOf(timer)).join('\n'))
 
     if(ended){

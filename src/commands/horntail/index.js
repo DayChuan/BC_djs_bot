@@ -5,7 +5,7 @@ import {isGmMember, openPanel} from '@/core/timerService'
 
 export const command = new SlashCommandBuilder()
     .setName('horntail')
-    .setDescription('在語音頻道的聊天室開一個黯黑龍王計時器面板（限 GM）')
+    .setDescription('在語音頻道的聊天室開一個闇黑龍王計時器面板（限 GM）')
     //0 = 預設只有伺服器管理員看得到這個指令(09-12)。
     //default_member_permissions 只吃權限位元、不吃身分組，沒辦法寫成「GM 才看得到」，
     //所以要讓 GM 也看得到，必須由伺服器端手動加覆寫：
@@ -44,12 +44,12 @@ export const action = async(ctx) => {
         await openPanel(ctx.channel)
     }
     catch(e){
-        logger.error(`建立黯黑龍王面板失敗 channel=${ctx.channel.id}：`, e)
+        logger.error(`建立闇黑龍王面板失敗 channel=${ctx.channel.id}：`, e)
         await ctx.editReply('開不起來，我沒辦法在這個頻道發言。請檢查我的權限後再試一次。')
         return
     }
 
-    logger.info(`建立黯黑龍王面板：channel=${ctx.channel.id} by=${ctx.user.tag}`)
+    logger.info(`建立闇黑龍王面板：channel=${ctx.channel.id} by=${ctx.user.tag}`)
     await ctx.editReply(
         '面板已建立。按一次開始倒數、再按一次停止，歸零後會自動接下一輪。\n'
         + '語音提醒是 Discord 的文字轉語音，**要在個人設定裡開啟「文字轉語音」才聽得到**。\n'

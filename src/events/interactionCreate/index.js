@@ -205,7 +205,7 @@ const handlePollPeek = async(interaction, parsed) => {
     await interaction.editReply(await peekPoll(parsed.pollId))
 }
 
-//黯黑龍王計時器的按鈕。面板是**公開訊息**，那三顆按鈕任何人都看得到，
+//闇黑龍王計時器的按鈕。面板是**公開訊息**，那三顆按鈕任何人都看得到，
 //所以每一次互動都要重新檢查 GM —— 只檢查指令是不夠的。
 //
 //權限與「面板已失效」都要在 deferUpdate 之前處理完：
