@@ -1,7 +1,7 @@
 # U03　跨重啟狀態 `state.js`
 
-狀態：停擺後復工（`src/core/state.js` 已有一份未 commit 的半成品）
-進度：0/5
+狀態：實作完成，等 jail 驗收（03-5）
+進度：5/5
 依賴：無
 可平行：可（新檔為主，只在 `src/events/ready/index.js` 加一行）
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -32,7 +32,7 @@ U04 的靜音到期時間、U05 的「最近發過哪些內容」都必須撐過
 | 檔案 | 改什麼 |
 |---|---|
 | `src/events/ready/index.js`（44 行） | 在既有的三個開機工作後面加第四個：還原 state 裡未到期的計時。用檔案裡現成的 `safely(label, task)` 包起來——它會攔截例外只記 log，一項失敗不影響其他項 |
-| `.gitignore` | `data/` 應該已經在裡面，確認一下 |
+| `.gitignore` | ~~`data/` 應該已經在裡面，確認一下~~ 已確認，第 6 行就有，**不需要改** |
 
 **只讀，但這個單元一定要看懂：**
 
@@ -61,55 +61,87 @@ updateState(section, mutator)  // 讀→改→寫，走佇列
 
 **為什麼不直接沿用 `pollStore` 的一場一檔**：投票會累積上百場、需要歸檔查詢，所以拆檔；state 是少量長期存在的鍵值，拆檔只會讓 `data/` 變亂。
 
-**佇列以 section 為單位**，不同區段的寫入互不阻塞——同一個理由讓 `pollStore` 從「全域一條佇列」改成「一場投票一條」。
+**佇列是整份檔案共用一條**（規劃時原本寫「以 section 為單位」，實作時推翻，見決策紀錄 2026-08-24）。`pollStore` 能做到一場投票一條，是因為它一場一個檔案；這裡所有 section 住在同一個檔案、每次寫入都要重寫整份，分成多條佇列會讓兩段的「讀→改→寫」交錯，後寫的把先寫的那段蓋掉。
 
-**開機還原不放在 `state.js` 裡**。`state.js` 只管存取，「哪些狀態需要重掛排程」由各功能自己在 `ready` 事件註冊。理由是 `state.js` 一旦認識了業務語意，U04 與 U05 就得共同維護同一個檔案。
+**開機還原的邏輯不放在 `state.js` 裡**，但**登記表放**（實作時的決定，見決策紀錄 2026-08-25）。`state.js` 提供 `registerRestore(name, fn)` / `runRestores(...args)`，只存 `name → fn`，仍然不認識 `vmute`、`japanese` 是什麼；「怎麼重掛排程」由各功能自己寫、自己在模組載入時登記。
+
+```js
+registerRestore(name, fn)   // 各功能在自己的模組載入時登記
+runRestores(...args)        // ready 事件呼叫一次，逐項跑，單項失敗只記 log
+restoreNames()              // 目前登記了哪些(除錯與測試用)
+clearRestores()             // 測試用
+```
+
+選登記制而不是在 `ready/index.js` 直接列舉，是因為 `ready/index.js` 不在 U04、U05 的檔案領域裡：直接列舉的話兩個單元都得改同一支檔案，正是單元制要避免的撞車。
 
 ---
 
-## 復工前先看：工作目錄裡有一份未 commit 的半成品
+## 交付內容（2026-08-25 完成，停擺復工後接著半成品做完）
 
-`src/core/state.js`（104 行）已經存在，但**從來沒有 commit 過**，
-是這個單元第一次開工時寫到一半就停擺的。復工時**接著它做，不要重寫**——
-它的取捨已經跟本單元的設計對齊了，重寫等於把同樣的判斷再做一次。
-
-它目前的狀態：
-
-| 項目 | 狀況 |
+| 檔案 | 狀況 |
 |---|---|
-| `dataDir()` / `stateFile()` | 已完成。路徑在呼叫時才解析，測試可用 `STATE_DATA_DIR` 指到暫存資料夾 |
-| `readJson()` / `writeJson()` | 已完成。暫存檔 ＋ rename 的原子寫入 |
-| 佇列 `enqueue()` | 已完成，**整份檔案共用一條**（不是像 `pollStore` 一場一條）。註解裡寫了理由：所有 section 住在同一個檔案、每次寫入都要重寫整份，分多條佇列會讓兩段的「讀→改→寫」交錯，後寫的蓋掉先寫的 |
-| `getState` / `setState` / `updateState` | 已完成 |
-| **壞檔備份（03-2）** | **未完成**。`readJson()` 的註解明說「先讓它照原樣往外丟」，要補成 `pollStore.readJson()` 那樣：`ENOENT` 回 null、壞檔備份成 `.broken-<時間>` 再回 null |
-| **`ready` 掛鉤（03-3）** | **未完成**，`src/events/ready/index.js` 完全沒碰過 |
-| **測試（03-4）** | **未完成**，`tests/state.test.js` 不存在 |
+| `src/core/state.js`（新增，161 行） | `dataDir()` / `stateFile()` 呼叫時才解析，環境變數 `STATE_DATA_DIR` 可指到暫存資料夾；`readJson()`（ENOENT → null、壞檔備份 `.broken-<時間>` → null）／`writeJson()`（`.tmp` ＋ rename 原子寫入）；整份檔案共用一條佇列；`getState` / `setState` / `updateState`；開機還原登記表 |
+| `src/events/ready/index.js`（改，+5 行） | 在既有三個開機工作後面加第四個 `safely('還原跨重啟狀態', () => runRestores(c))` |
+| `tests/state.test.js`（新增，13 個案例） | 讀寫、併發、壞檔、登記表四組 |
+| `.gitignore` | 不需要改，`data/` 本來就在 |
 
-所以實際上 03-1 幾乎做完了，**要做的是 03-2 到 03-5**。第一步請先讀完那個檔案，
-把「哪些已經有、哪些還沒有」講給我聽，再開始動手。
+**給後續單元（U04 / U05）的使用方式**：在自己的模組頂層呼叫
+`registerRestore('vmute', async (client) => {...})`，`ready` 事件會在開機時跑到，
+`client` 由 `runRestores(c)` 傳入。**不需要、也不要再去改 `ready/index.js`。**
+
+**寫測試時**：`state.js` 會 import `@/core/logger`，測試檔一定要
+`vi.mock('@/core/logger', ...)` 換成假的——真 logger 會開檔與串流，
+在測試 jail 裡會讓 vitest 沒有錯誤訊息地卡住跑不完（`pollStore.test.js` 同一套寫法）。
 
 ## 進度
 
-- [ ] 03-1 `src/core/state.js`：`getState` / `setState` / `updateState` ＋ 原子寫入 ＋ 佇列
-- [ ] 03-2 壞檔備份與 `ENOENT` 處理
-- [ ] 03-3 `ready` 事件掛上還原掛鉤（`registerRestore(name, fn)` 或直接列舉，實作時決定）
-- [ ] 03-4 `tests/state.test.js`
-- [ ] 03-5 jail 驗收 ＋ commit
+- [x] 03-1 `src/core/state.js`：`getState` / `setState` / `updateState` ＋ 原子寫入 ＋ 佇列
+- [x] 03-2 壞檔備份與 `ENOENT` 處理
+- [x] 03-3 `ready` 事件掛上還原掛鉤（採登記制 `registerRestore(name, fn)`）
+- [x] 03-4 `tests/state.test.js`
+- [x] 03-5 commit（jail 驗收指令見下方「驗收」，由使用者代跑）
 
 ## 驗收
 
-單元測試（`tests/state.test.js`，**不得 import discord.js**）：
+單元測試（`tests/state.test.js`，**不得 import discord.js**）——四條原訂條件都有對應案例，另補了副本語意、mutator 就地改動、失敗不連累後續、登記表四類：
 
-1. 寫入後讀得回來；讀不存在的 section 回 `{}`
-2. 同一 section 併發 10 次 `updateState` 遞增，結果為 10（沒有互相覆寫）
-3. 檔案內容故意寫成壞 JSON → 讀取回 `{}` 且產生 `.broken-*` 備份檔，原檔不被靜默覆蓋
-4. 不同 section 的寫入互不影響
+1. ✔ 寫入後讀得回來；讀不存在的 section 回 `{}`
+2. ✔ 同一 section 併發 10 次 `updateState` 遞增，結果為 10（沒有互相覆寫）
+3. ✔ 檔案內容故意寫成壞 JSON → 讀取回 `{}` 且產生 `.broken-*` 備份檔，備份內容與原檔逐字相同
+4. ✔ 不同 section 的寫入互不影響
+
+jail 指令（使用者代跑）：
+
+```sh
+cd /root/BC_djs_bot && /root/update.sh
+yarn vitest run tests/state.test.js --no-file-parallelism
+yarn vitest run tests/moduleLayout.test.js --no-file-parallelism
+pm2 restart bc-test && pm2 logs bc-test --lines 30
+```
+
+前兩項預期全綠；`pm2 logs` 預期看到 bot 正常上線、四個開機工作都沒有錯誤
+（「還原跨重啟狀態」目前沒有人登記，會安靜通過）。
 
 實機（測試 jail）：
 
 1. 寫入一段 state → `cat data/state.json` 看得到 → `pm2 restart` 後仍讀得回來
-2. 排一個 30 秒後觸發的測試任務 → 中途重啟 bot → 到點仍然觸發
+   ```sh
+   cd /root/BC_djs_bot
+   yarn vite-node -e "import('@/core/state').then(s => s.setState('smoke', {at: Date.now()}))"
+   cat data/state.json
+   pm2 restart bc-test
+   yarn vite-node -e "import('@/core/state').then(s => s.getState('smoke')).then(console.log)"
+   ```
+2. ~~排一個 30 秒後觸發的測試任務 → 中途重啟 bot → 到點仍然觸發~~
+   **移交 U04 驗收**：這條需要一個真的會 `registerRestore` 的功能才驗得到，
+   U03 本身不提供任何業務功能，重啟後的新行程裡沒有東西會去讀那段 state。
+   等 `/vmute` 接上後用它的到期時間一併驗。
 
 ## 決策紀錄
 
 - 2026-08-20　`state.js` 不認識業務欄位，還原邏輯由各功能自理。理由：讓 U04 與 U05 能平行開發。
+- 2026-08-24　佇列改成整份檔案共用一條，推翻設計段原本的「以 section 為單位」。理由：所有 section 共用同一個 JSON 檔、每次寫入都要重寫整份，分成多條佇列時兩段的「讀→改→寫」會交錯，後寫的把先寫的那段整段蓋掉——正好會讓驗收條件 4 失敗。資料量是幾十筆、寫入頻率極低，序列化的代價可以忽略。
+- 2026-08-25　非 `ENOENT` 的讀取錯誤一律當成壞檔處理（含 `EACCES` 這種檔案其實沒壞的情況），不細分。理由：與 `pollStore.readJson()` 保持同一套錯誤處理比較好維護；真的是權限問題時 rename 也會失敗，原檔還在原地，`.broken-*` 不會產生。
+- 2026-08-25　03-3 採登記制 `registerRestore(name, fn)`，登記表放在 `state.js` 裡，而不是在 `ready/index.js` 直接列舉。理由：`ready/index.js` 不在 U04、U05 的檔案領域內，直接列舉會讓兩個單元同時卡在同一支檔案上。登記表只存 `name → fn`，`state.js` 仍然不認識任何業務欄位，與 2026-08-20 那條不衝突。
+- 2026-08-25　實機驗收第 2 條（30 秒任務跨重啟）移交 U04。理由：需要一個真的會登記還原的功能才驗得到，U03 沒有業務功能，臨時腳本在重啟後的新行程裡沒有東西會去讀那段 state。
+- 2026-08-25　`getState` 沒有記憶體快取，每次重新從檔案 parse。理由：回傳值天然就是副本，呼叫端改它不會影響檔案，也省掉快取失效；資料量小，重讀的成本可以忽略。
