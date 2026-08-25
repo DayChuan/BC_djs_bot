@@ -1,7 +1,7 @@
 # U04　語音暫時靜音 `/vmute`
 
-狀態：未開始
-進度：0/11（階段一 0/6、階段二 0/5）
+狀態：階段一完成，待測試伺服器驗收
+進度：6/12（階段一 6/7、階段二 0/5）
 依賴：U03（到期時間要撐過重啟）
 可平行：可（新指令為主，不動既有檔案）
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -35,17 +35,19 @@
 - 目標已被靜音 → 覆蓋為新的到期時間（不是疊加）
 - 目標是 bot 自己或伺服器擁有者 → 拒絕
 - `50013 Missing Permissions`（bot 身分組低於目標，或沒有靜音成員權限）→ 友善訊息 ＋ 寫 log，不能讓行程掛掉
-- 到期解除時目標已離開語音 → `setMute(false)` 會失敗，吞掉只記 log；state 那筆照樣清掉
+- 到期解除時目標已離開語音 → 不能清掉 state（見決策紀錄 2026-08-25）。改成把那筆標記
+  `pending: true` 留著，由 `voiceStateUpdate` 在他下次進語音時補解除
 
 **注意**：這是**伺服器靜音**，不是 Discord 內建的 timeout。內建 timeout 會連文字訊息一起禁掉、到期由 Discord 端處理；伺服器靜音只影響語音，但**到期解除必須由我們自己記時**，這就是為什麼要依賴 U03。
 
 ### 階段一進度
 
-- [ ] 04-1 `src/commands/vmute/index.js` 指令骨架與六個 choices
-- [ ] 04-2 `src/core/vmute.js`：`mute()` / `unmute()` / 到期排程 / state 讀寫
-- [ ] 04-3 同語音頻道的檢查與所有邊界回覆
-- [ ] 04-4 開機還原（過期立即解除、未過期重掛排程）
-- [ ] 04-5 `tests/vmute.test.js`（純邏輯：剩餘時間計算、過期判定、參數驗證）
+- [x] 04-1 `src/commands/vmute/index.js` 指令骨架與六個 choices
+- [x] 04-2 `src/core/vmute.js`：`mute()` / `unmute()` / 到期排程 / state 讀寫
+- [x] 04-3 同語音頻道的檢查與所有邊界回覆
+- [x] 04-4 開機還原（過期立即解除、未過期重掛排程）＋ `voiceStateUpdate` 補解除 pending
+- [x] 04-4b `src/commands/vunmute/index.js` 手動解除（不指定對象＝解除自己）
+- [x] 04-5 `tests/vmute.test.js`（純邏輯：剩餘時間計算、過期判定、參數驗證、pending 流程）
 - [ ] 04-6 jail ＋ 測試伺服器驗收，commit
 
 ---
@@ -95,14 +97,16 @@
 **要新增的：**
 
 - `src/commands/vmute/index.js` — 指令定義與參數驗證。匯出 `command`（`SlashCommandBuilder`）與 `action`，`src/core/loader.js` 會自動掃到，不需要改 loader
-- `src/core/vmute.js` — 靜音本體與到期管理
+- `src/core/vmute.js` — 靜音本體與到期管理。**不 import discord.js**，member/client 由呼叫端傳入，純函式才測得到
+- `src/commands/vunmute/index.js` — 手動解除，`user` 選填，不填就是解除自己
+- `src/events/voiceStateUpdate/index.js` — 進入／切換語音時補解除 `pending` 的紀錄
 - `src/core/vmuteVote.js` — 階段二才建
 
 **要改的：**
 
 | 檔案 | 改什麼 |
 |---|---|
-| `src/events/ready/index.js` | 加一項開機還原（用檔案裡的 `safely()` 包起來） |
+| ~~`src/events/ready/index.js`~~ | **不用改**。U03 的 `state.js` 做成登記制（`registerRestore`），`ready` 已經會呼叫 `runRestores` |
 | `src/events/interactionCreate/index.js`（278 行） | 階段二才需要：在 `isButton()` 的分派鏈裡加一段 `vmute:` 前綴的處理。**注意分派順序**——現有的鏈是先 `parseTemplateCustomId` → `parseAdminCustomId` → `parsePollCustomId`，每個 parser 認不出來就回 `null` 往下走，新增的前綴要挑一個不會被既有 parser 誤認的字串 |
 
 **只讀，這個單元一定要看的：**
@@ -136,3 +140,53 @@
 - 2026-08-20　目標必須與發起人在同一個語音頻道。
 - 2026-08-20　階段二：語音內至少 3 人才受理；母數＝頻道人數扣掉被提名者，同意 > 50% 才通過。使用者確認。
 - 2026-08-20　（原案）單一 `seconds` 參數 ＋ autocomplete 讓使用者自訂秒數 —— **暫緩**，等階段二之後再評估。
+- 2026-08-25　**不改 `src/events/ready/index.js`**。U03 把開機還原做成登記制，`vmute.js` 在模組載入時
+  `registerRestore('vmute', restore)`，`ready` 的 `runRestores` 會呼叫到。少改一個共用檔＝少一個平行衝突點。
+- 2026-08-25　**到期時解不掉不能刪紀錄**（使用者提出）。伺服器靜音掛在 guild member 上，不是掛在語音連線上：
+  人離開語音時靜音仍然留著，而 Discord 不允許改「不在語音」的成員的語音狀態。原方案「吞掉錯誤、state 照清」
+  會讓他下次進語音時變成**永久靜音**，只能人工右鍵解除。改成標記 `pending: true` 留著，
+  由 `voiceStateUpdate` 在他下次進語音時補解除。抓不到 guild／member 時也一律保留紀錄，不刪。
+- 2026-08-25　**補解除不比對語音頻道**，只比對 guild。伺服器靜音跟著人走，換頻道也還在；
+  比對頻道的話「離開後改進別的頻道」就永遠對不上，那筆紀錄會永遠解不掉。
+- 2026-08-25　**新增 `/vunmute`**（使用者要求）。到期前要有辦法手動解除，且被靜音的人換頻道也還是靜音的。
+  `user` 選填，不填＝解除自己。沒有我們的紀錄也照樣執行 `setMute(false)`，讓人工右鍵靜音的成員也能解掉。
+- 2026-08-25　**`/vunmute` 測試期開放給所有人**（使用者指定）。權限判斷集中在 `core/vmute.js` 的 `canUnmute()`，
+  目前一律回 `{ok: true}`；之後要收成「限管理員或限本人」時只改這個函式，指令檔不必動。
+
+---
+
+## 階段一的實作重點（給後續接手的人）
+
+**state 結構**（section `vmute`，key ＝ `vmute:<guildId>:<userId>`，與 scheduler 的 key 同一個字串）：
+
+```json
+{"vmute:<guildId>:<userId>": {
+  "guildId": "…", "userId": "…", "until": "ISO 字串",
+  "seconds": 60, "reason": null, "by": "<發起人 id>", "pending": true
+}}
+```
+
+`until` 存絕對時間而不是剩餘秒數 —— 重啟後只有絕對時間算得出還剩多久。
+`pending` 只在「時間到了但當下解不掉」時出現，代表還欠這個人一次解除。
+
+`unmute()` 回傳 `status`：`done`（已解除、紀錄已清）／`pending`（人不在語音，紀錄留著）／
+`failed`（50013 權限不足，紀錄也留著，補權限後還有機會解掉）。
+
+### 測試伺服器驗收清單（04-6）
+
+jail 步驟：`/root/update.sh` → **`yarn deploy`**（新指令一定要跑，重啟不會讓 Discord 看到它）
+→ `yarn test` → `pm2 restart bc-test`
+
+| # | 操作 | 預期 |
+|---|---|---|
+| 1 | 進語音，對同頻道的人 `/vmute seconds:60` | 立刻被伺服器靜音，60 秒後自動解除 |
+| 2 | 不在語音時下指令 | 「你要先待在語音頻道裡」 |
+| 3 | 對不同語音頻道的人 | 「對方不在你的語音頻道裡」 |
+| 4 | 靜音中再下一次 300 秒 | 覆蓋成 300 秒，不是疊加成 360 |
+| 5 | 靜音 600 秒後 `pm2 restart bc-test` | 重啟後仍在原本的時間點解除 |
+| 6 | 靜音 60 秒後停 bot、過 2 分鐘再啟動 | 開機立刻解除 |
+| 7 | 靜音中對方離開語音，等到期 | bot 不崩潰；`data/state.json` 那筆變成 `pending: true` |
+| 8 | 接續 7，對方重新進入**任一個**語音頻道 | 數秒內自動解除，state 那筆消失 |
+| 9 | `/vunmute`（不帶參數，自己被靜音時） | 解除自己 |
+| 10 | `/vunmute user:<某人>` | 解除對方；對方不在語音時回「下次進語音時會自動解除」並留 `pending` |
+| 11 | 對位階高於 bot 的人下 `/vmute` | 友善訊息，bot 不崩潰 |
