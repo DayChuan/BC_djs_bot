@@ -82,6 +82,38 @@ U06 的 `/drive` 上線後值得重新量一次——檔案傳輸會實際吃 I/
 | 多支測試檔停在 `0/N` 不動，先跑完的那支正常 | 同時開多個 worker。推測 jail 內取到的 CPU 數是宿主機的 | `fileParallelism: false` |
 | 有 import `discord.js` 的測試檔一跑就停住，CPU 全閒，`--testTimeout` 攔不到 | 卡在 vite/esbuild 的轉換階段，測試根本還沒開始執行 | `server.deps.external: ['discord.js']` |
 
+### 單獨跑一支測試檔會卡在退出流程（2026-08-25）
+
+```sh
+yarn test tests/state.test.js        # 跑得完，但回不到提示字元，Ctrl+C 也殺不掉
+```
+
+**測試本身是好的**——實測 `moduleLayout.test.js` 單獨跑會印出 127 個測試全綠、耗時 55ms，
+只是印完之後行程不結束。加 `--pool=forks --poolOptions.forks.singleFork=true` 也一樣。
+這是 vitest／tinypool 在這個 jail 的行程退出行為，不是我們的程式碼。
+
+**對策：一律跑完整套。** 12 檔 356 個測試只要 4.4 秒，單獨跑省不到什麼：
+
+```sh
+cd ~/BC_djs_bot_test && yarn test
+```
+
+只想看某幾個案例就用測試名稱過濾（仍然跑完整套，但只顯示符合的）：
+
+```sh
+yarn test -t "壞檔"
+```
+
+真的非單獨跑不可時加 `timeout`，保證拿得回提示字元：
+
+```sh
+timeout 60 yarn vitest run tests/state.test.js --pool=forks --poolOptions.forks.singleFork=true
+```
+
+**不打算追根因**：這是第三次遇到 vitest 在這個 jail 的怪癖（前兩次是多檔平行卡在 0/N、
+import discord.js 就卡），繞過去的成本一直是零。等測試套件長到一次要跑好幾分鐘、
+單獨跑變成剛需時再回來看。
+
 ### 硬性限制：測試檔不得直接或間接 import `discord.js`
 
 `server.deps.external` 只是把卡住的點往後推，沒有真正解決。這條規則是靠實驗歸納的——卡住的檔案全部有碰（`pollRender`、`pollPanel`、`pollAdmin`、`pollService`），跑得完的全部沒碰（`pollStore`、`pollArchive`、`scheduler`、`pollIdentities`）。已經花掉太多時間在這個環境問題上而報酬是零，所以不再嘗試修它，改為繞開。
