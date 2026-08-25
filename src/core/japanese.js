@@ -156,6 +156,10 @@ export const parseImport = (entries, rawText) => {
         let renamedFrom = ''
         if(!entry.id || idNumber(entry.id) === 0 || used.has(entry.id)){
             renamedFrom = entry.id
+            //要跳過已經被占走的號碼再發：next 只在「有改號」時才前進，
+            //而本批內保留原號的那幾筆同樣占用號碼。少了這個 while，
+            //匯入兩筆都叫 j_0001 時第二筆會又被配到 j_0001(2026-08-25 由單元測試抓到)。
+            while(used.has(formatId(next))) next += 1
             entry.id = formatId(next)
             next += 1
         }
