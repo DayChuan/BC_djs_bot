@@ -260,7 +260,7 @@ export const action = async(ctx) => {
     const lines = [`投票已發出，共 ${options.length} 個選項。`]
     if(template) lines.push(`已套用模板「${template.name}」。`)
     if(dateStart){
-        lines.push(`選項日期：${dateStart} ～ ${endDateOf(dateStart, options.length)}` +
+        lines.push(`選項日期：${dateStart} ～ ${endDateOf(bases, dateStart)}` +
             (weeklyConfig ? '（下一輪會自動 +7 天）。' : '。'))
     }
     lines.push(`截止時間：<t:${Math.floor(new Date(closeAt).getTime() / 1000)}:F>`)

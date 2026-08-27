@@ -100,8 +100,16 @@ export const publishPending = async (client, pollId) => {
     }
 
     const closeAt = nextWeeklyDate(poll.weekly.closeDay, poll.weekly.closeTime).toISOString()
+
+    //選項標籤是上一輪結算當下算好寫進檔案的，發布前依 base 再算一次。
+    //標籤本來就是 base + dateStart 推導出來的衍生資料，重算是冪等的，
+    //但這一步讓「日期規則改過」之後，既有的排程下次發出時會自動更正 ——
+    //少了它，2026-08-27 的星期對齊修正對現存的 pending 完全沒有效果。
+    const refreshed = poll.dateStart ? applyDates(basesOf(poll.options), poll.dateStart) : null
+
     const ready = await updatePoll(pollId, (record) => {
         record.closeAt = closeAt
+        if(refreshed) record.options = refreshed
     })
 
     return sendPollMessage(client, ready)

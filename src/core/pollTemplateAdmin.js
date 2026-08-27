@@ -61,7 +61,7 @@ const identityLabelOf = (key) => {
 
 const dateRangeLabel = (template) => {
     if(!template.startDate) return '不套用日期'
-    const end = endDateOf(template.startDate, template.options.length)
+    const end = endDateOf(template.options, template.startDate)
     return `${template.startDate} ～ ${end}`
 }
 

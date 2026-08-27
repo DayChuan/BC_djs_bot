@@ -69,9 +69,48 @@ export const addDays = (dateText, days) => {
     return formatDateOnly(ms + days * DAY_MS)
 }
 
-//選項數決定迄日：起日 8/18、七個選項 → 迄日 8/24。
-//不另外存迄日 —— 兩份資料總有一天會對不上。
-export const endDateOf = (startDate, count) => addDays(startDate, Math.max(0, count - 1))
+//選項文字開頭的星期。認 星期X / 週X / 周X / 禮拜X，「日」與「天」都當星期日。
+//認不出來回 null —— 呼叫端據此決定要不要退回舊的逐日遞增。
+const WEEKDAY_CHARS = {日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6}
+
+export const weekdayOf = (text) => {
+    const matched = /^\s*(?:星期|週|周|禮拜)([日天一二三四五六])/.exec(String(text || ''))
+    if(!matched) return null
+    return WEEKDAY_CHARS[matched[1]]
+}
+
+//每個選項相對於起日要往後幾天。
+//
+//全部選項都認得出星期時依星期對齊：「星期六早上」「星期六下午」「星期六晚上」
+//三個都是星期六，就會落在同一天。用索引遞增的話它們會變成連續三天 ——
+//那正是 2026-08-27 回報的 bug。
+//
+//只要有一個選項認不出星期，整組退回「一個選項一天」。
+//「甲,乙,丙」這種沒有星期的模板行為完全不變，既有資料不需要動。
+//
+//起日的星期與第一個選項不一致時，以起日為錨點往後推：
+//起日是星期日、第一個選項是「星期二」，那就是起日之後的那個星期二(+2 天)。
+//起日的語意是「這一輪從哪天開始算」，不是「第一個選項是哪一天」。
+export const dayOffsets = (bases, startDate) => {
+    const start = parseDateOnly(startDate)
+    if(start === null) return null
+    if(!Array.isArray(bases) || bases.length === 0) return null
+
+    const weekdays = bases.map((base) => weekdayOf(base))
+    if(weekdays.some((day) => day === null)) return bases.map((_, index) => index)
+
+    const startDay = new Date(start).getUTCDay()
+    return weekdays.map((day) => (day - startDay + 7) % 7)
+}
+
+//迄日 = 所有選項算出來的日期裡最大的那一個。
+//不能用「起日 + 選項數 - 1」：同一天有早中晚三段時選項數會比實際天數多，
+//11 個選項會算出 8/28，但實際只到 8/24。
+export const endDateOf = (bases, startDate) => {
+    const offsets = dayOffsets(bases, startDate)
+    if(!offsets) return null
+    return addDays(startDate, Math.max(...offsets))
+}
 
 //把「星期二,星期三,...」配上日期，變成「星期二(8/18),星期三(8/19),...」。
 //
@@ -81,13 +120,15 @@ export const endDateOf = (startDate, count) => addDays(startDate, Math.max(0, co
 export const applyDates = (bases, startDate) => {
     const start = parseDateOnly(startDate)
     if(start === null) return null
-    if(!Array.isArray(bases) || bases.length === 0) return null
 
-    const last = start + (bases.length - 1) * DAY_MS
+    const offsets = dayOffsets(bases, startDate)
+    if(!offsets) return null
+
+    const last = start + Math.max(...offsets) * DAY_MS
     const crossYear = new Date(start).getUTCFullYear() !== new Date(last).getUTCFullYear()
 
     return bases.map((base, index) => {
-        const date = new Date(start + index * DAY_MS)
+        const date = new Date(start + offsets[index] * DAY_MS)
         const stamp = crossYear
             ? `${date.getUTCFullYear()}/${date.getUTCMonth() + 1}/${date.getUTCDate()}`
             : `${date.getUTCMonth() + 1}/${date.getUTCDate()}`
@@ -300,6 +341,8 @@ export default {
     parseDateOnly,
     formatDateOnly,
     addDays,
+    weekdayOf,
+    dayOffsets,
     endDateOf,
     applyDates,
     buildPollOptions,

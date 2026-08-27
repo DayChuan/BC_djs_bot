@@ -80,18 +80,121 @@ describe('addDays', () => {
     })
 })
 
+//2026-08-18 是星期二。底下依星期對齊的案例都以它當起日。
+const WEEK = ['星期二', '星期三', '星期四', '星期五', '星期六', '星期日', '星期一']
+
+//實際在用的 MapleStory 模板：週末拆成早上／下午／晚上三段。
+const MAPLE = [
+    '星期二', '星期三', '星期四', '星期五',
+    '星期六早上', '星期六下午', '星期六晚上',
+    '星期日早上', '星期日下午', '星期日晚上',
+    '星期一',
+]
+
+describe('weekdayOf', () => {
+    it('認得出星期幾', () => {
+        expect(tpl.weekdayOf('星期日')).toBe(0)
+        expect(tpl.weekdayOf('星期一')).toBe(1)
+        expect(tpl.weekdayOf('星期六')).toBe(6)
+    })
+
+    it('「天」等同「日」', () => {
+        expect(tpl.weekdayOf('星期天')).toBe(0)
+    })
+
+    it('週／周／禮拜都認', () => {
+        expect(tpl.weekdayOf('週六')).toBe(6)
+        expect(tpl.weekdayOf('周六')).toBe(6)
+        expect(tpl.weekdayOf('禮拜六')).toBe(6)
+    })
+
+    it('後面接時段也認得出來（這是 bug 的關鍵）', () => {
+        expect(tpl.weekdayOf('星期六早上')).toBe(6)
+        expect(tpl.weekdayOf('星期六下午')).toBe(6)
+        expect(tpl.weekdayOf('星期六晚上')).toBe(6)
+    })
+
+    it('沒有星期就回 null', () => {
+        expect(tpl.weekdayOf('甲')).toBeNull()
+        expect(tpl.weekdayOf('早上')).toBeNull()
+        expect(tpl.weekdayOf('')).toBeNull()
+        expect(tpl.weekdayOf(null)).toBeNull()
+    })
+
+    it('星期不在開頭時不算（避免「第三星期二」這種誤判）', () => {
+        expect(tpl.weekdayOf('第三星期二')).toBeNull()
+    })
+})
+
+describe('dayOffsets', () => {
+    it('全部認得出星期時依星期對齊', () => {
+        expect(tpl.dayOffsets(WEEK, '2026-08-18')).toEqual([0, 1, 2, 3, 4, 5, 6])
+    })
+
+    it('同一天的三個時段偏移相同', () => {
+        expect(tpl.dayOffsets(MAPLE, '2026-08-18')).toEqual([0, 1, 2, 3, 4, 4, 4, 5, 5, 5, 6])
+    })
+
+    it('只要有一個認不出星期，整組退回逐日遞增', () => {
+        expect(tpl.dayOffsets(['星期二', '機動場次', '星期四'], '2026-08-18')).toEqual([0, 1, 2])
+    })
+
+    it('完全沒有星期的選項維持逐日遞增', () => {
+        expect(tpl.dayOffsets(['甲', '乙', '丙'], '2026-08-18')).toEqual([0, 1, 2])
+    })
+
+    it('起日的星期與第一個選項不同時，以起日為錨點往後推', () => {
+        //2026-08-23 是星期日，第一個選項是星期二 → 往後兩天
+        expect(tpl.dayOffsets(WEEK, '2026-08-23')).toEqual([2, 3, 4, 5, 6, 0, 1])
+    })
+
+    it('起日不合法或沒有選項時回 null', () => {
+        expect(tpl.dayOffsets(WEEK, '2026-02-31')).toBeNull()
+        expect(tpl.dayOffsets([], '2026-08-18')).toBeNull()
+    })
+})
+
 describe('endDateOf', () => {
-    it('迄日由起日與選項數推算', () => {
-        expect(tpl.endDateOf('2026-08-18', 7)).toBe('2026-08-24')
+    it('迄日取實際算出來的最大日期，不是起日加選項數', () => {
+        //11 個選項但只跨 7 天。用選項數會算成 8/28。
+        expect(tpl.endDateOf(MAPLE, '2026-08-18')).toBe('2026-08-24')
+    })
+
+    it('一天一個選項時就是起日加選項數減一', () => {
+        expect(tpl.endDateOf(WEEK, '2026-08-18')).toBe('2026-08-24')
+    })
+
+    it('認不出星期時退回逐日遞增', () => {
+        expect(tpl.endDateOf(['甲', '乙', '丙'], '2026-08-18')).toBe('2026-08-20')
     })
 
     it('只有一個選項時起迄同一天', () => {
-        expect(tpl.endDateOf('2026-08-18', 1)).toBe('2026-08-18')
+        expect(tpl.endDateOf(['星期二'], '2026-08-18')).toBe('2026-08-18')
     })
 })
 
 describe('applyDates', () => {
-    const WEEK = ['星期二', '星期三', '星期四', '星期五', '星期六', '星期日', '星期一']
+    it('週末的三個時段落在同一天（2026-08-27 回報的 bug）', () => {
+        const options = tpl.applyDates(MAPLE, '2026-08-18')
+        expect(options.map((option) => option.label)).toEqual([
+            '星期二(8/18)', '星期三(8/19)', '星期四(8/20)', '星期五(8/21)',
+            '星期六早上(8/22)', '星期六下午(8/22)', '星期六晚上(8/22)',
+            '星期日早上(8/23)', '星期日下午(8/23)', '星期日晚上(8/23)',
+            '星期一(8/24)',
+        ])
+    })
+
+    it('同一天的三個時段各自有獨立的 key，票不會混在一起', () => {
+        const options = tpl.applyDates(MAPLE, '2026-08-18')
+        expect(new Set(options.map((option) => option.key)).size).toBe(MAPLE.length)
+    })
+
+    it('下一輪 +7 天後，同一天的三段仍然是同一天', () => {
+        const options = tpl.applyDates(MAPLE, '2026-08-25')
+        expect(options.slice(4, 7).map((option) => option.label)).toEqual([
+            '星期六早上(8/29)', '星期六下午(8/29)', '星期六晚上(8/29)',
+        ])
+    })
 
     it('同年的區間不帶年份', () => {
         const options = tpl.applyDates(WEEK, '2026-08-18')
@@ -108,10 +211,12 @@ describe('applyDates', () => {
     })
 
     it('跨月的區間日期要正確接續', () => {
-        const options = tpl.applyDates(WEEK, '2026-08-30')
+        //2026-09-29 是星期二。原本這個案例用 2026-08-30，但那天是星期日，
+        //改成依星期對齊之後「星期二」就不再是起日當天了，案例本身要跟著改。
+        const options = tpl.applyDates(WEEK, '2026-09-29')
         expect(options.map((option) => option.label)).toEqual([
-            '星期二(8/30)', '星期三(8/31)', '星期四(9/1)', '星期五(9/2)',
-            '星期六(9/3)', '星期日(9/4)', '星期一(9/5)',
+            '星期二(9/29)', '星期三(9/30)', '星期四(10/1)', '星期五(10/2)',
+            '星期六(10/3)', '星期日(10/4)', '星期一(10/5)',
         ])
     })
 
