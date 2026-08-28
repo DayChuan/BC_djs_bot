@@ -12,7 +12,7 @@ import {
     updatePoll,
 } from '@/core/pollStore'
 import {archivePoll} from '@/core/pollArchive'
-import {addDays, applyDates, basesOf} from '@/core/pollTemplate'
+import {addDays, applyDates, basesOf, refreshDatedOptions} from '@/core/pollTemplate'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
 import {PermissionFlagsBits} from 'discord.js'
 import {
@@ -102,10 +102,9 @@ export const publishPending = async (client, pollId) => {
     const closeAt = nextWeeklyDate(poll.weekly.closeDay, poll.weekly.closeTime).toISOString()
 
     //選項標籤是上一輪結算當下算好寫進檔案的，發布前依 base 再算一次。
-    //標籤本來就是 base + dateStart 推導出來的衍生資料，重算是冪等的，
-    //但這一步讓「日期規則改過」之後，既有的排程下次發出時會自動更正 ——
-    //少了它，2026-08-27 的星期對齊修正對現存的 pending 完全沒有效果。
-    const refreshed = poll.dateStart ? applyDates(basesOf(poll.options), poll.dateStart) : null
+    //開機時 restorePolls() 已經算過一輪，這裡是第二道保險：
+    //涵蓋「開機之後才變成 pending、還沒經過重啟」的那些場次。
+    const refreshed = refreshDatedOptions(poll.options, poll.dateStart)
 
     const ready = await updatePoll(pollId, (record) => {
         record.closeAt = closeAt
@@ -221,7 +220,28 @@ export const closePoll = async (client, pollId) => {
 
 /////////////////////////// 開機還原 ///////////////////////////
 
-//bot 重啟後，記憶體裡的排程全部消失，但 polls.json 還在。
+//開機時把排程中的投票標籤依 base 重算一次，算出來有變才寫檔。
+//
+//日期規則改過之後，靠這一步讓既有排程「重啟就立刻更正」，不必等到發布那一刻。
+//少了它，管理面板會一路顯示舊日期到下次發布為止，中間既看不出修好了沒，
+//管理員看了也會以為修正沒生效(2026-08-28 實際發生)。
+//
+//只動 pending。open 的投票訊息已經貼在頻道裡，改存檔會讓檔案與畫面對不上，
+//那比標籤舊了更難查。
+const refreshPendingOptions = async (poll) => {
+    const next = refreshDatedOptions(poll.options, poll.dateStart)
+    if(!next) return
+
+    await updatePoll(poll.id, (record) => {
+        //重讀之後狀態可能已經變了，此時放棄這次異動
+        if(record.status !== 'pending') return false
+        record.options = next
+    })
+
+    logger.info(`排程投票 ${poll.id}「${poll.title}」的選項日期已依現行規則重算`)
+}
+
+//bot 重啟後，記憶體裡的排程全部消失，但投票檔案還在。
 //沒有這一步，重啟過的投票就永遠不會結算。
 export const restorePolls = async (client) => {
     const polls = await listActivePolls()
@@ -229,6 +249,8 @@ export const restorePolls = async (client) => {
 
     for(const poll of polls){
         try{
+            if(poll.status === 'pending') await refreshPendingOptions(poll)
+
             if(poll.status === 'open'){
                 //已經過期的(停機期間錯過的截止時間)會立刻執行，補結算
                 scheduler.scheduleAt(closeKey(poll.id), new Date(poll.closeAt), () => closePoll(client, poll.id))

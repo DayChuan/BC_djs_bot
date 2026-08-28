@@ -69,14 +69,43 @@ export const addDays = (dateText, days) => {
     return formatDateOnly(ms + days * DAY_MS)
 }
 
-//選項文字開頭的星期。認 星期X / 週X / 周X / 禮拜X，「日」與「天」都當星期日。
-//認不出來回 null —— 呼叫端據此決定要不要退回舊的逐日遞增。
+//選項文字開頭的星期。認不出來回 null ——
+//呼叫端據此決定要不要退回舊的逐日遞增。
+//
+//中文認 星期X / 週X / 周X / 禮拜X，「日」與「天」都當星期日。
 const WEEKDAY_CHARS = {日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6}
 
+//英文認全名與常見縮寫，不分大小寫。
+const WEEKDAY_WORDS = {
+    sun: 0, sunday: 0,
+    mon: 1, monday: 1,
+    tue: 2, tues: 2, tuesday: 2,
+    wed: 3, weds: 3, wednesday: 3,
+    thu: 4, thur: 4, thurs: 4, thursday: 4,
+    fri: 5, friday: 5,
+    sat: 6, saturday: 6,
+}
+
 export const weekdayOf = (text) => {
-    const matched = /^\s*(?:星期|週|周|禮拜)([日天一二三四五六])/.exec(String(text || ''))
-    if(!matched) return null
-    return WEEKDAY_CHARS[matched[1]]
+    const raw = String(text || '')
+
+    const chinese = /^\s*(?:星期|週|周|禮拜)([日天一二三四五六])/.exec(raw)
+    if(chinese) return WEEKDAY_CHARS[chinese[1]]
+
+    //英文取開頭那一整串字母去查表，而不是用前綴比對。
+    //「Sat(Mor)」的字母串是 Sat，查得到；「Sunny 場次」「Monster 團」的字母串是
+    //Sunny 與 Monster，查不到 —— 整串比對不中就是不中，不需要另外寫邊界規則，
+    //也不會把不是星期的字誤判成星期日與星期一。
+    const english = /^\s*([A-Za-z]+)/.exec(raw)
+    if(english){
+        //用 typeof 檢查而不是 in：物件字面值帶著 Object.prototype，
+        //`WEEKDAY_WORDS['constructor']` 會回一個函式而不是 undefined，
+        //於是名為「Constructor」的選項會拿到一個函式當星期幾。
+        const day = WEEKDAY_WORDS[english[1].toLowerCase()]
+        if(typeof day === 'number') return day
+    }
+
+    return null
 }
 
 //每個選項相對於起日要往後幾天。
@@ -156,6 +185,27 @@ export const buildPollOptions = (bases, dateStart = null) => {
 //舊投票的 options 沒有 base 欄位，退回用 label 當 base。
 export const basesOf = (options) =>
     (options || []).map((option) => option.base || option.label)
+
+//依 base 與起日把標籤重算一次。回傳新的 options，或 null 代表「不需要更新」
+//(沒有起日、算不出來、或算出來跟現在完全一樣)。
+//
+//「一樣就回 null」是給呼叫端判斷要不要寫檔用的：開機還原時每一場都會呼叫它，
+//少了這個判斷，每次重啟都會把所有排程投票重寫一遍。
+//
+//票是綁在 option.key 上的，所以一律沿用原本的 key。applyDates 產生的是
+//o0..oN，萬一某場投票的編號不是這個序列，重新編號會讓已投的票全部對不上。
+export const refreshDatedOptions = (options, dateStart) => {
+    if(!dateStart) return null
+    if(!Array.isArray(options) || options.length === 0) return null
+
+    const dated = applyDates(basesOf(options), dateStart)
+    if(!dated) return null
+
+    const next = dated.map((option, index) => ({...option, key: options[index].key}))
+    const same = next.every((option, index) => option.label === options[index].label)
+
+    return same ? null : next
+}
 
 //每週設定在 Modal 裡只佔一格：「發起星期,時間 / 結算星期,時間」。
 //Modal 最多五個輸入框，拆成四格就沒有位置放別的了。
@@ -347,6 +397,7 @@ export default {
     applyDates,
     buildPollOptions,
     basesOf,
+    refreshDatedOptions,
     parseWeeklyText,
     formatWeeklyText,
     parseTemplateFields,

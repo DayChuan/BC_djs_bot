@@ -91,6 +91,9 @@ const MAPLE = [
     '星期一',
 ]
 
+//測試站的模板實際上是英文的（data/templates/t_mszufcpodq.json）
+const MAPLE_EN = ['Tue', 'Wed', 'Thu', 'Fri', 'Sat(Mor)', 'Sat(noon)', 'Sun(Mor)', 'Sun(noon)', 'Mon']
+
 describe('weekdayOf', () => {
     it('認得出星期幾', () => {
         expect(tpl.weekdayOf('星期日')).toBe(0)
@@ -114,6 +117,39 @@ describe('weekdayOf', () => {
         expect(tpl.weekdayOf('星期六晚上')).toBe(6)
     })
 
+    it('英文全名與縮寫都認，不分大小寫', () => {
+        expect(tpl.weekdayOf('Sunday')).toBe(0)
+        expect(tpl.weekdayOf('Sun')).toBe(0)
+        expect(tpl.weekdayOf('MONDAY')).toBe(1)
+        expect(tpl.weekdayOf('tue')).toBe(2)
+        expect(tpl.weekdayOf('Tues')).toBe(2)
+        expect(tpl.weekdayOf('Wed')).toBe(3)
+        expect(tpl.weekdayOf('Thu')).toBe(4)
+        expect(tpl.weekdayOf('Thurs')).toBe(4)
+        expect(tpl.weekdayOf('Fri')).toBe(5)
+        expect(tpl.weekdayOf('Saturday')).toBe(6)
+    })
+
+    it('英文後面接時段也認得出來（測試站模板的實際寫法）', () => {
+        expect(tpl.weekdayOf('Sat(Mor)')).toBe(6)
+        expect(tpl.weekdayOf('Sat(noon)')).toBe(6)
+        expect(tpl.weekdayOf('Sun(Mor)')).toBe(0)
+        expect(tpl.weekdayOf('Sat 晚上')).toBe(6)
+    })
+
+    it('開頭字母串整個比對，不做前綴比對', () => {
+        //這幾個如果用前綴比對就會被誤判成星期日與星期一
+        expect(tpl.weekdayOf('Sunny 場次')).toBeNull()
+        expect(tpl.weekdayOf('Monster 團')).toBeNull()
+        expect(tpl.weekdayOf('Satellite')).toBeNull()
+    })
+
+    it('物件原型上的名稱不會被當成星期', () => {
+        //WEEKDAY_WORDS 是物件字面值，用 in 判斷的話 constructor 會查得到東西
+        expect(tpl.weekdayOf('constructor')).toBeNull()
+        expect(tpl.weekdayOf('toString')).toBeNull()
+    })
+
     it('沒有星期就回 null', () => {
         expect(tpl.weekdayOf('甲')).toBeNull()
         expect(tpl.weekdayOf('早上')).toBeNull()
@@ -133,6 +169,14 @@ describe('dayOffsets', () => {
 
     it('同一天的三個時段偏移相同', () => {
         expect(tpl.dayOffsets(MAPLE, '2026-08-18')).toEqual([0, 1, 2, 3, 4, 4, 4, 5, 5, 5, 6])
+    })
+
+    it('英文模板也依星期對齊', () => {
+        expect(tpl.dayOffsets(MAPLE_EN, '2026-08-18')).toEqual([0, 1, 2, 3, 4, 4, 5, 5, 6])
+    })
+
+    it('中英混用時兩邊都認得出來，不會退回逐日遞增', () => {
+        expect(tpl.dayOffsets(['星期二', 'Wed', '禮拜四'], '2026-08-18')).toEqual([0, 1, 2])
     })
 
     it('只要有一個認不出星期，整組退回逐日遞增', () => {
@@ -273,6 +317,57 @@ describe('buildPollOptions / basesOf', () => {
 
     it('舊投票的選項沒有 base 欄位時退回用 label', () => {
         expect(tpl.basesOf([{key: 'o0', label: '星期二'}])).toEqual(['星期二'])
+    })
+})
+
+describe('refreshDatedOptions', () => {
+    //模擬正式站 p_mtan08kdu9 的實際資料：base 正確，label 是舊規則算出來的
+    const stale = [
+        {key: 'o0', base: '星期六早上', label: '星期六早上(9/12)'},
+        {key: 'o1', base: '星期六下午', label: '星期六下午(9/13)'},
+        {key: 'o2', base: '星期六晚上', label: '星期六晚上(9/14)'},
+    ]
+
+    it('把舊規則算出來的標籤更正成同一天', () => {
+        //2026-09-08 是星期二，星期六 = +4 天 = 9/12
+        const next = tpl.refreshDatedOptions(stale, '2026-09-08')
+        expect(next.map((option) => option.label)).toEqual([
+            '星期六早上(9/12)', '星期六下午(9/12)', '星期六晚上(9/12)',
+        ])
+    })
+
+    it('沿用原本的 key，已投的票才不會對不上', () => {
+        //刻意用不是 o0..oN 的編號，確認不會被重新編號
+        const odd = [
+            {key: 'o5', base: '星期六早上', label: '星期六早上(9/12)'},
+            {key: 'o9', base: '星期六下午', label: '星期六下午(9/13)'},
+        ]
+        expect(tpl.refreshDatedOptions(odd, '2026-09-08').map((option) => option.key))
+            .toEqual(['o5', 'o9'])
+    })
+
+    it('算出來跟現在一樣時回 null，呼叫端才不會每次重啟都寫檔', () => {
+        const fresh = tpl.applyDates(['星期二', '星期三'], '2026-09-08')
+        expect(tpl.refreshDatedOptions(fresh, '2026-09-08')).toBeNull()
+    })
+
+    it('沒有起日就回 null（這場投票本來就不標日期）', () => {
+        expect(tpl.refreshDatedOptions(stale, null)).toBeNull()
+        expect(tpl.refreshDatedOptions(stale, '')).toBeNull()
+    })
+
+    it('起日不合法或沒有選項時回 null', () => {
+        expect(tpl.refreshDatedOptions(stale, '2026-02-31')).toBeNull()
+        expect(tpl.refreshDatedOptions([], '2026-09-08')).toBeNull()
+    })
+
+    it('認不出星期的選項維持逐日遞增，也算重算成功', () => {
+        const plain = [
+            {key: 'o0', base: '甲', label: '甲(9/1)'},
+            {key: 'o1', base: '乙', label: '乙(9/2)'},
+        ]
+        expect(tpl.refreshDatedOptions(plain, '2026-09-08').map((option) => option.label))
+            .toEqual(['甲(9/8)', '乙(9/9)'])
     })
 })
 

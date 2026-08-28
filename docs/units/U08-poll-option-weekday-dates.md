@@ -87,6 +87,59 @@
 | open | 標籤已寫進 Discord 訊息，不回頭改，等結算後下一輪才正確 |
 | archive | 歷史紀錄，不動 |
 
+### 2026-08-28 追加一：英文星期也要認
+
+初版只認中文（`星期X` / `週X` / `周X` / `禮拜X`）。但測試站的模板
+`data/templates/t_mszufcpodq.json`（名稱「楓之谷週常」）實際上是英文的：
+
+```json
+["Tue","Wed","Thu","Fri","Sat(Mor)","Sat(noon)","Sun(Mor)","Sun(noon)","Mon"]
+```
+
+`dayOffsets()` 是全有全無的，所以整組退回逐日遞增，週末兩段被排成兩天。
+這是提案時沒有先看實際資料造成的疏漏。
+
+英文改成**取開頭那一整串字母去查表**，而不是前綴比對：
+
+- `Sat(Mor)` 的字母串是 `Sat` → 查得到 → 星期六
+- `Sunny 場次` 的字母串是 `Sunny` → 查不到 → null
+
+前綴比對會把 `Sunny`、`Monster`、`Satellite` 誤判成星期日、星期一、星期六，
+整串比對天生就沒有這個問題，也不必另外寫邊界規則。
+
+查表用 `typeof === 'number'` 判斷而不是 `in`：物件字面值帶著 `Object.prototype`，
+`WEEKDAY_WORDS['constructor']` 會回一個函式，名為「Constructor」的選項會拿到
+一個函式當星期幾。
+
+### 2026-08-28 追加二：開機時就重算，不要等到發布
+
+初版只在 `publishPending()` 重算。技術上 pending 會自己好，但實際使用時有兩個問題：
+
+1. 使用者要等到下次發布（正式站是 9/1）才驗得出修好了沒
+2. 中間那幾天 `/poll_admin` 一直顯示舊日期，看起來像修正沒生效
+
+2026-08-28 使用者回報「排程的投票內容沒有更新到日期天數」，就是這個。
+查正式站 `p_mtan08kdu9`「龍王固定投票(提早兩週)」，`base` 正確、`label` 是舊規則
+算出來的（星期六三段被排成 9/12、9/13、9/14）。
+
+改為在 `restorePolls()`（開機還原排程）就重算一次，**算出來有變才寫檔**。
+重啟後管理面板立刻正確。`publishPending()` 的重算保留當第二道保險，
+涵蓋「開機之後才變成 pending、還沒經過重啟」的場次。
+
+只動 `pending`。`open` 的投票訊息已經貼在頻道裡，改存檔會讓檔案與畫面對不上。
+
+### 重算一律沿用原本的 key
+
+抽出 `refreshDatedOptions(options, dateStart)` 放在 `pollTemplate.js`
+（`pollService.js` 會 import discord.js，測試碰不得）。
+
+它沿用原本的 `option.key`，不用 `applyDates()` 產生的 `o0..oN`。
+票是綁在 key 上的，萬一某場投票的編號不是那個序列，重新編號會讓已投的票全部對不上。
+初版的 `publishPending()` 直接用 `applyDates()` 的結果，有這個隱患，一併修掉。
+
+回傳 `null` 代表「不需要更新」（沒有起日、算不出來、或算出來跟現在一樣）。
+開機時每一場都會呼叫，少了這個判斷會變成每次重啟都把所有排程投票重寫一遍。
+
 ## 檔案領域
 
 | 檔案 | 做什麼 | 改 |
@@ -115,6 +168,8 @@
 - [x] 日期改為依星期對齊（`weekdayOf` / `dayOffsets` / `applyDates`）
 - [x] `endDateOf` 改為取實際最大日期，並更新兩處呼叫端
 - [x] `publishPending()` 發布前重算標籤
+- [x] 英文星期辨識（2026-08-28 追加）
+- [x] `restorePolls()` 開機重算 pending（2026-08-28 追加）
 - [x] 單元測試
 - [ ] 測試 jail 實機驗收
 
@@ -134,5 +189,9 @@ npx vitest run tests/pollTemplate.test.js --no-file-parallelism --reporter=verbo
    　投票訊息上「星期六早上／下午／晚上」三個選項的日期應相同
 3. 用不含星期的模板（或直接 `options:甲,乙,丙 date_start:2026-08-18`）發起
    　應維持逐日遞增 8/18、8/19、8/20
-4. 既有的 pending 投票：`/poll_admin` 選那場 → 立即發布
-   　發出來的選項日期應已更正
+4. **重啟 bot 之後**，`/poll_admin` → 排程中的那場 → 詳情
+   　選項日期應該當場就是對齊的，不需要按「立即發布」。
+   　log 會有一行「排程投票 xxx 的選項日期已依現行規則重算」。
+   　再重啟一次，那行 log **不應該**再出現（沒有變化就不寫檔）
+5. 英文模板：測試站的「楓之谷週常」是 `Tue/Wed/.../Sat(Mor)/Sat(noon)/...`
+   　`Sat(Mor)` 與 `Sat(noon)` 應為同一天，`Sun(Mor)` 與 `Sun(noon)` 應為同一天
