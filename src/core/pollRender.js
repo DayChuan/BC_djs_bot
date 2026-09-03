@@ -6,7 +6,10 @@ import {
     StringSelectMenuBuilder,
 } from 'discord.js'
 import {getIdentityGroup, identityLabel} from '@/config/pollIdentities'
+import {LINEUP_IDENTITY_GROUP, MISSING_LABEL, UNKNOWN_LEVEL} from '@/config/lineup'
+import {buildLineup, pickTopOptions} from '@/core/lineup'
 import {getEntries, MAX_ENTRIES_PER_USER, tally} from '@/core/pollStore'
+import {getMembers} from '@/core/roster'
 
 //customId 的格式是 poll:<動作>:<投票id>[:<角色id>]。
 //id 帶在裡面，bot 重啟後頻道裡那則舊訊息照樣點得動 ——
@@ -356,6 +359,85 @@ export const buildClosedMessage = (poll) => {
         .setDescription(`這場投票已於 ${timestamp(poll.closeAt)} 結束，結果公布在下方訊息。`)
 
     return {embeds: [embed], components: []}
+}
+
+/////////////////////////// 出團名單 ///////////////////////////
+
+//名單的用途是**方便統計與複製**，所以刻意用純文字：
+//不進 embed、不套粗體與程式碼區塊 —— 複製出去要能直接貼進聊天室或試算表。
+//分隊規則全在 core/lineup.js，這裡只負責把資料排成字。
+
+//Discord 單則訊息上限 2000，留一點餘裕
+const MAX_MESSAGE = 1900
+
+//一行是「等級 職業（角色名）」。等級查不到寫 ??，人照樣留在名單上。
+//角色名也查不到時退回 mention —— 至少看得出是誰，總比一個空括號好。
+const lineupRow = (poll, member) => {
+    const level = member.level === null ? UNKNOWN_LEVEL : member.level
+    const job = identityLabel(poll.identityGroup, member.identity)
+    return `${level}${job}（${member.name || `<@${member.userId}>`}）`
+}
+
+//超過長度就切成多則。切在行與行之間，不會把某個人切成兩半。
+const splitLines = (lines) => {
+    const messages = []
+    let current = []
+    let length = 0
+
+    for(const line of lines){
+        if(current.length > 0 && length + line.length + 1 > MAX_MESSAGE){
+            messages.push(current.join('\n'))
+            current = []
+            length = 0
+        }
+        current.push(line)
+        length += line.length + 1
+    }
+    if(current.length > 0) messages.push(current.join('\n'))
+
+    return messages
+}
+
+const lineupLines = (poll, option, roster, displayNames) => {
+    const lineup = buildLineup(option.entries, roster, {displayNames})
+    const lines = [option.label, '一隊']
+
+    for(const seat of lineup.firstTeam){
+        const job = identityLabel(poll.identityGroup, seat.identity)
+        //沒人的那一格保留職業名再標 (缺人)：只寫 (缺人) 的話看不出缺的是哪一個位置
+        lines.push(seat.member ? lineupRow(poll, seat.member) : `${job}${MISSING_LABEL}`)
+    }
+
+    if(lineup.secondTeam.length > 0){
+        lines.push('', '二隊', ...lineup.secondTeam.map((member) => lineupRow(poll, member)))
+    }
+    if(lineup.reserves.length > 0){
+        lines.push('', '候補', ...lineup.reserves.map((member) => lineupRow(poll, member)))
+    }
+
+    return lines
+}
+
+/**
+ * 結算時要另外貼的出團名單。回傳**一個訊息內容的陣列**，呼叫端逐則送出。
+ *
+ * 取前兩高票的票數層級，同票數的日期全部各出一份名單(見 core/lineup 的 pickTopOptions)，
+ * 一個日期一則訊息 —— 分開才好一份一份複製。太長的再自動切段。
+ *
+ * 不是楓之谷的投票、或根本沒人投票時回空陣列，呼叫端就什麼都不貼。
+ *
+ * @param roster        預設讀 data/roster.json，測試或特殊情境可以覆蓋
+ * @param displayNames  {userId: '顯示名稱'}，人員表查不到時的角色名退路
+ */
+export const buildLineupMessages = (poll, {roster = null, displayNames = {}} = {}) => {
+    if(poll.identityGroup !== LINEUP_IDENTITY_GROUP) return []
+
+    const picked = pickTopOptions(tally(poll).options)
+    if(picked.length === 0) return []
+
+    const table = roster || getMembers()
+
+    return picked.flatMap((option) => splitLines(lineupLines(poll, option, table, displayNames)))
 }
 
 /////////////////////////// 快速投票 ///////////////////////////

@@ -1,7 +1,7 @@
 # U11　楓之谷出團名單
 
-狀態：可開工（規格已確認）
-進度：0/9
+狀態：程式完成，等測試 jail 的 `yarn test` 與實機驗收
+進度：7/9
 依賴：無（投票系統早已上線；與 U10 不衝突，檔案領域不重疊）
 可平行：可
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -65,9 +65,18 @@ tally(poll).options[i].entries   // → [{userId, options, identity}, ...]
 ```
 data/roster.json（不進版控）
 {
-  "<discordId>:<identity>": {"level": 168, "name": "daychuan", "updatedAt": "..."}
+  "version": 1,
+  "updatedAt": "...",
+  "members": {
+    "<discordId>:<identity>": {"level": 168, "name": "daychuan", "updatedAt": "..."}
+  }
 }
 ```
+
+外層包一層 `version` / `members`，理由與 `selfRoles.json` 相同：格式判斷與日後 migrate 需要一個版本號，扁平 map 沒有地方放。
+
+同一隻角色由多人共用時（例如三個人輪流開拳霸「短拳」），就**每個 Discord ID 各存一筆**、內容相同，
+這樣不管誰投那個職業都查得到等級與角色名。
 
 `identity` 存**職業表的 value**（例如 `shadower`）而不是中文標籤——標籤日後可能改字，value 不會。
 
@@ -92,7 +101,7 @@ data/roster.json（不進版控）
 | 其餘四個固定職業有多人 | 一隊取一個（等級最高），其餘進二隊 |
 | 不在固定六職裡的職業 | 全部進二隊 |
 | 二隊 | 上限 6 人，依等級由高到低 |
-| 第 13 人起 | 進「候補」，一樣依等級由高到低 |
+| 第 13 人起 | 進「候補」，一樣依等級由高到低。**候補不設上限**，全部列出 |
 
 > 冰雷取高、黑騎取低是刻意不對稱的，不是筆誤。實作時**不要「順手統一」**。
 
@@ -116,6 +125,20 @@ data/roster.json（不進版控）
 
 ---
 
+## `/roster` 的權限（2026-09-03 使用者確認）
+
+| 子指令 | 誰能用 | 做什麼 |
+|---|---|---|
+| `/roster list` | 所有人 | 一般成員只看到**自己的**角色；管理員看到全部 |
+| `/roster level <職業> <等級>` | 所有人 | 只改**自己已登記**角色的等級。查無此角色就提示去找管理員 |
+| `/roster set <user> <職業> <等級> <角色名>` | 管理員 | 新增或覆寫任何人的任何欄位 |
+| `/roster remove <user> <職業>` | 管理員 | 刪除 |
+
+一般成員**不能新增、不能改角色名、不能碰別人的資料**。
+新增一律走管理員，否則有人打錯職業就會多出一筆永遠對不到投票的孤兒資料。
+
+---
+
 ## 相關檔案
 
 **要新增的：**
@@ -125,7 +148,7 @@ data/roster.json（不進版控）
 | `src/config/lineup.js` | 一隊的六個職業（依輸出順序）、冰雷取高／黑騎取低的規則、隊伍人數上限。**改規則只改這裡** | 否 |
 | `src/core/roster.js` | `data/roster.json` 的讀寫與查詢 | 否 |
 | `src/core/lineup.js` | **分隊的純邏輯**：輸入 entries ＋ 人員表 → 輸出一隊／二隊／候補／缺人 | **否（要單元測試）** |
-| `src/commands/roster/index.js` | `/roster set` / `remove` / `list`，限管理員 | 是 |
+| `src/commands/roster/index.js` | `/roster`，權限分兩級（見下方「`/roster` 的權限」） | 是 |
 | `tests/lineup.test.js`、`tests/roster.test.js` | | 否 |
 
 **要改的：**
@@ -150,14 +173,14 @@ data/roster.json（不進版控）
 
 ## 進度
 
-- [ ] 11-1 `src/config/lineup.js` ＋ `src/core/lineup.js`（純分隊邏輯）
-- [ ] 11-2 `tests/lineup.test.js`（**這個單元的重點**，見驗收）
-- [ ] 11-3 `src/core/roster.js` ＋ `tests/roster.test.js`
-- [ ] 11-4 `/roster set` / `remove` / `list`
-- [ ] 11-5 `pollRender.buildLineupMessage()`
-- [ ] 11-6 `closePoll()` 接上，只對楓之谷的投票產生
-- [ ] 11-7 前兩高票、平手全列
-- [ ] 11-8 `yarn test` 全套通過
+- [x] 11-1 `src/config/lineup.js` ＋ `src/core/lineup.js`（純分隊邏輯）
+- [x] 11-2 `tests/lineup.test.js`（**這個單元的重點**，見驗收）
+- [x] 11-3 `src/core/roster.js` ＋ `tests/roster.test.js`
+- [x] 11-4 `/roster`：`list` / `level`（所有人）、`set` / `remove`（管理員）
+- [x] 11-5 `pollRender.buildLineupMessages()`（複數，一個日期一則）
+- [x] 11-6 `closePoll()` 接上，只對楓之谷的投票產生
+- [x] 11-7 前兩高票、平手全列（`lineup.pickTopOptions()`）
+- [ ] 11-8 `yarn test` 全套通過　←　要在測試 jail 跑，步驟見下方
 - [ ] 11-9 測試伺服器實機驗收，commit
 
 ## 驗收
@@ -176,7 +199,10 @@ data/roster.json（不進版控）
 
 **實機（測試伺服器）：**
 
-10. `/roster set` 建立幾筆，`/roster list` 列得出來；非管理員用不了
+10. 管理員 `/roster set` 建立幾筆、`/roster list` 看得到全部；
+    一般成員 `/roster list` 只看到自己的、`/roster level` 改得動自己的等級、
+    `/roster set` 與 `/roster remove` 被擋下來
+15. **新增 `/roster` 之後必須跑 `yarn deploy`**，只重啟 bot 的話 Discord 看不到這個指令
 11. 楓之谷投票結算 → 結果報表之後**多貼一則名單**，格式與等級正確
 12. 非楓之谷的投票結算 → **不產生名單，也不報錯**
 13. 有人沒登記在人員表 → 顯示 `??` 但仍在名單上
@@ -192,3 +218,38 @@ data/roster.json（不進版控）
 - 2026-09-03　**結算時自動公開貼在投票所在頻道**，不做 ephemeral。使用者確認：「僅供內部使用」只是範本文字，實際上就是要給大家複製用。
 - 2026-09-03　查不到等級的人顯示 `??` 而不是略過。理由：名單少一個人比顯示 `??` 嚴重得多。
 - 2026-09-03　只對 `identityGroup === 'maplestory'` 產生名單，其他群組安靜跳過。
+- 2026-09-03　`roster.json` 外層加 `version` / `members` 包裝，不用扁平 map。理由：與 `selfRoles.json` 一致，格式判斷與日後 migrate 需要版本號。
+- 2026-09-03　候補不設人數上限，全部列出。使用者確認：實際人數還沒多到需要截斷。
+- 2026-09-03　`/roster` 權限分兩級：一般成員只能看與改自己的等級，新增／改角色名／刪除限管理員。使用者確認。
+- 2026-09-03　「暗影神偷」沿用職業表既有的標籤「刀賊」，不改 `pollIdentities.js`。理由：那個檔在 U11 領域外，改了會同時影響投票選單的顯示。使用者確認。
+- 2026-09-03　整個 U11 只下一個 commit（做完全部項目後）。使用者指定。
+- 2026-09-03　初始人員資料已建在本目錄 `data/roster.json`（15 筆）。**`data/` 在 `.gitignore` 裡，這份不會被 git 帶到 jail**，要手動複製到 jail 的 `/root/BC_djs_bot/data/roster.json`。
+
+- 2026-09-03　角色名的退路做成三層：人員表的 `name` →　Discord 顯示名稱 →　`<@id>` mention。
+  顯示名稱在 `closePoll()` 用 `guild.members.fetch({user: [...]})` **一次批次抓**（十幾個人不該打十幾次 API），
+  抓失敗就整批放棄退到 mention，不會因此少列任何人。`core/lineup.js` 維持不碰 discord.js，名稱由呼叫端傳入。
+- 2026-09-03　等級未知（`null`）在所有排序裡一律視為最低優先。
+  特別是**取等級最低的黑騎士時只在有登記的人裡面挑** —— 把未知當成等級 0 會讓沒登記的人擠掉有登記的人。
+- 2026-09-03　同等級平手時維持 entries 的原始順序（穩定排序），輸出才可重現、測試才寫得出預期值。
+- 2026-09-03　一隊缺人的那一行輸出 `箭神(缺人)` 而不是單獨的 `(缺人)`。理由：只寫 `(缺人)` 看不出缺的是哪個位置。
+- 2026-09-03　`buildLineupMessages()` 回傳**訊息陣列**、一個日期一則。理由：名單是拿來複製的，
+  三份擠在一則裡沒辦法一份一份複製；順便處理 Discord 2000 字上限（超長的再自動切段）。
+- 2026-09-03　名單用純文字，不進 embed、不套粗體與程式碼區塊。理由：複製出去要能直接貼進聊天室或試算表。
+- 2026-09-03　`roster.js` 做成 `createRosterStore(filePath)` 工廠 ＋ 模組單例。
+  理由：測試必須指定暫存檔，直接測單例會寫到專案真正的 `data/roster.json`，把實際等級資料洗掉。
+- 2026-09-03　`roster.json` 讀壞時**不覆蓋原檔**（`selfRoles.js` 會覆蓋，這裡刻意不同）。
+  理由：自助身分組有環境檔可以推出 seed，人員表沒有；空表寫回去等於把所有人的等級永久刪掉。
+- 2026-09-03　`roster.js` 相容沒有 `version`/`members` 外層的舊扁平格式，載入時自動補上外層。
+- 2026-09-03　名單貼在「結果報表所在的同一個 channel」。U10 把投票開到討論串後，名單自然也會在討論串裡，不必另外改。
+- 2026-09-03　`sendLineup()` 整段包 try/catch 且一定 `await`。理由：名單是附加資訊，貼不出來不該讓排下一輪與歸檔停住；
+  而未 await 的 Promise 若 reject，外層 try/catch 攔不到，整個行程會被 Node 終止（見 CLAUDE.md 技術重點）。
+- 2026-09-03　`/roster` 的 `setDefaultMemberPermissions` 設成 `SendMessages`，`set`/`remove` 的管理員檢查寫在 `action` 裡。
+  理由：Discord 的預設權限是**整支指令**的門檻，沒辦法逐個子指令設。
+
+---
+
+## 給下一個人的提醒
+
+- **`src/config/lineup.js` 是唯一該改規則的地方。** `core/lineup.js` 沒有寫死任何職業。
+- **冰雷取最高、黑騎士取最低是刻意不對稱的。** `tests/lineup.test.js` 有兩個相鄰的測試就是為了擋「順手統一」。
+- `data/roster.json` 在 `.gitignore` 裡，**永遠不會經由 git 到 jail**。改了要手動複製過去。

@@ -32,6 +32,7 @@ import {
     purgeRecord,
 } from '@/core/pollAdmin'
 import {
+    buildLineupMessages,
     buildMemberPanel,
     buildQuickMessage,
     buildClosedMessage,
@@ -39,6 +40,7 @@ import {
     buildResultMessage,
     canPeek,
 } from '@/core/pollRender'
+import {LINEUP_IDENTITY_GROUP} from '@/config/lineup'
 
 //排程的 key。用投票 id 當一部分，重複註冊時 scheduler 會自動蓋掉舊的，
 //所以同一場投票不管經過幾次重啟或還原，都只會有一份排程、只會結算一次。
@@ -271,6 +273,46 @@ const wakeThread = async (channel, pollId) => {
     return fresh
 }
 
+//人員表裡查不到角色名時的退路：Discord 上的顯示名稱。
+//一次把整場投票的人抓回來，不要一人一個 fetch —— 十幾個人就是十幾次 API 呼叫。
+//抓不到就回空表，名單那邊會再退一層改用 mention，不會因此少列人。
+const fetchDisplayNames = async (guild, userIds) => {
+    const names = {}
+    if(!guild || userIds.length === 0) return names
+
+    try{
+        const members = await guild.members.fetch({user: userIds})
+        for(const [id, member] of members) names[id] = member.displayName
+    }
+    catch(e){
+        logger.warn('取出團名單的顯示名稱失敗，改用 mention：', e)
+    }
+
+    return names
+}
+
+//結果報表之後**再貼一則**出團名單(不是塞進原本那則)。
+//只有楓之谷的投票有名單，其他群組安靜跳過、不報錯。
+//
+//整段包起來且一定 await：名單只是附加資訊，貼不出來不該讓結算(排下一輪、歸檔)跟著停住，
+//而未 await 的 Promise 若 reject，外層的 try/catch 攔不到，整個行程會被 Node 終止。
+const sendLineup = async (channel, poll) => {
+    if(poll.identityGroup !== LINEUP_IDENTITY_GROUP) return
+
+    try{
+        const displayNames = await fetchDisplayNames(channel.guild, Object.keys(poll.votes || {}))
+        const messages = buildLineupMessages(poll, {displayNames})
+
+        for(const content of messages){
+            await channel.send({content, allowedMentions: {parse: []}})
+        }
+        if(messages.length > 0) logger.info(`投票 ${poll.id} 已貼出團名單 ${messages.length} 則`)
+    }
+    catch(e){
+        logger.error(`投票 ${poll.id} 的出團名單貼不出來(結算本身不受影響)：`, e)
+    }
+}
+
 export const closePoll = async (client, pollId) => {
     //先在佇列裡把狀態改成 closed。同一瞬間有第二個結算進來時，
     //它看到的就已經是 closed，會直接放棄，不會重複貼結果。
@@ -312,7 +354,11 @@ export const closePoll = async (client, pollId) => {
     }
 
     if(!quick){
-        if(channel) await channel.send(buildResultMessage(poll))
+        if(channel){
+            await channel.send(buildResultMessage(poll))
+            //貼在同一個 channel，所以 U10 把投票開在討論串時，名單也會跟著在討論串裡
+            await sendLineup(channel, poll)
+        }
         else logger.error(`投票 ${pollId} 找不到頻道 ${poll.channelId}，結果無法公布`)
     }
 
