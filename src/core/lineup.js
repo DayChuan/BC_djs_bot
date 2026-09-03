@@ -3,6 +3,7 @@ import {
     LOWEST_LEVEL_IDENTITIES,
     rosterKey,
     SECOND_TEAM_SIZE,
+    TOP_OPTION_COUNT,
     TOP_OPTION_LEVELS,
 } from '@/config/lineup'
 
@@ -96,20 +97,32 @@ export const buildLineup = (entries = [], roster = {}, {displayNames = {}} = {})
 }
 
 /**
- * 取票數最高的前幾個「層級」，同票數的選項全部列出。
+ * 挑出要出名單的日期：從最高票的層級往下取，**湊到 count 個就停**。
  *
- * 例：票數 5、5、3、1 → 層級取 [5, 3] → 回傳三個選項(兩個 5 票、一個 3 票)。
+ * 同一層級(同票數)的日期一定整組列出，不會只列其中一個 —— 平手就是平手。
+ * 所以實際份數可能超過 count：
+ *
+ *   5、5、3、1  → 最高票就有兩個日期，夠了 → 兩份（3 票那天不列）
+ *   5、3、3、1  → 最高票只有一個，往下取 3 票那層(兩個全列) → 三份
+ *   5、3、1     → 一份加一份 → 兩份
+ *
  * 沒人投的選項(count 0)不算一個層級，不然全場零票時會列出所有日期。
- *
  * 同票數之間維持選項原本的順序 —— 選項多半是日期，照原順序就是照時間先後。
  */
-export const pickTopOptions = (options = [], levels = TOP_OPTION_LEVELS) => {
+export const pickTopOptions = (
+    options = [],
+    {count = TOP_OPTION_COUNT, maxLevels = TOP_OPTION_LEVELS} = {},
+) => {
     const voted = options.filter((option) => option.count > 0)
-    const top = [...new Set(voted.map((option) => option.count))]
-        .sort((a, b) => b - a)
-        .slice(0, levels)
+    const levels = [...new Set(voted.map((option) => option.count))].sort((a, b) => b - a)
 
-    return voted
-        .filter((option) => top.includes(option.count))
-        .sort((a, b) => b.count - a.count || options.indexOf(a) - options.indexOf(b))
+    const picked = []
+    for(const level of levels.slice(0, maxLevels)){
+        //已經湊滿就不再往下取。判斷放在迴圈開頭，
+        //這樣同一層級裡的日期永遠是整組進來，不會被截半。
+        if(picked.length >= count) break
+        picked.push(...voted.filter((option) => option.count === level))
+    }
+
+    return picked.sort((a, b) => b.count - a.count || options.indexOf(a) - options.indexOf(b))
 }

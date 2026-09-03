@@ -203,11 +203,11 @@ describe('一人多角色', () => {
     })
 })
 
-describe('pickTopOptions 取前兩高票', () => {
+describe('pickTopOptions 挑要出名單的日期', () => {
     const option = (key, label, count) => ({key, label, count})
 
     //驗收 9
-    it('票數 5、5、3、1 → 取兩個層級共三個選項(兩個 5 票、一個 3 票)', () => {
+    it('票數 5、5、3、1 → 最高票就有兩天，湊滿了，**不再取第二高票**', () => {
         const picked = pickTopOptions([
             option('o0', '9/3', 5),
             option('o1', '9/4', 5),
@@ -215,7 +215,50 @@ describe('pickTopOptions 取前兩高票', () => {
             option('o3', '9/6', 1),
         ])
 
+        expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4'])
+    })
+
+    it('票數 5、3、1 → 最高票只有一天，往下取第二高票，共兩天', () => {
+        const picked = pickTopOptions([
+            option('o0', '9/3', 5),
+            option('o1', '9/4', 3),
+            option('o2', '9/5', 1),
+        ])
+
+        expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4'])
+    })
+
+    it('票數 5、3、3 → 第二高票平手就整組列出，寧可多一份也不切半', () => {
+        const picked = pickTopOptions([
+            option('o0', '9/3', 5),
+            option('o1', '9/4', 3),
+            option('o2', '9/5', 3),
+        ])
+
         expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4', '9/5'])
+    })
+
+    it('最高票三個人並列 → 三天全列，一樣不再往下取', () => {
+        const picked = pickTopOptions([
+            option('o0', '9/3', 4),
+            option('o1', '9/4', 4),
+            option('o2', '9/5', 4),
+            option('o3', '9/6', 2),
+        ])
+
+        expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4', '9/5'])
+    })
+
+    it('票數 5、1、1、1、1 → 最多只往下取一個層級，不會一路撈到底', () => {
+        const picked = pickTopOptions([
+            option('o0', '9/3', 5),
+            option('o1', '9/4', 1),
+            option('o2', '9/5', 1),
+            option('o3', '9/6', 1),
+        ])
+
+        //5 票那層只有一天，往下取 1 票那層(三天全列)，然後就沒有第三個層級了
+        expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4', '9/5', '9/6'])
     })
 
     it('同票數之間維持選項原本的順序(＝日期的先後)', () => {
@@ -225,7 +268,7 @@ describe('pickTopOptions 取前兩高票', () => {
             option('o2', '9/4', 5),
         ])
 
-        expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4', '9/5'])
+        expect(picked.map((item) => item.label)).toEqual(['9/3', '9/4'])
     })
 
     it('零票的選項不算一個層級', () => {

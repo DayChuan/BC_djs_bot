@@ -7,11 +7,14 @@ import logger from '@/core/logger'
 //出團名單的人員表維護。
 //
 //權限分兩級(2026-09-03 使用者確認)：
-//  list / level  所有人 —— 一般成員只看得到、也只改得動**自己的**角色
-//  set / remove  管理員 —— 新增、改角色名、刪除
+//  list / level         所有人 —— 一般成員只看得到、也只改得動**自己的**角色
+//  edit / set / remove  管理員 —— 改別人的等級、新增、改角色名、刪除
 //
-//setDefaultMemberPermissions 是**整支指令**的門檻，沒辦法逐個子指令設，
-//所以這裡開到 SendMessages，管理員限定的兩個子指令在 action 裡自己擋。
+//edit 與 set 的分工：edit 只動等級(角色名保持原樣)，是「幫大家更新等級」的日常操作；
+//set 是整筆覆寫，用來新增或改角色名。日常維護用 edit 才不會不小心把角色名洗掉。
+//
+//本來想做成 /roster edit level 這種子指令**群組**，但 core/helpText.js 只認 type 1 的
+//子指令，群組(type 2)會從 /help 裡靜靜消失，而 helpText.js 在 U11 的檔案領域外。
 
 const MIN_LEVEL = 1
 const MAX_LEVEL = 300
@@ -44,7 +47,16 @@ export const command = new SlashCommandBuilder()
         .setDescription('查看已登記的角色（一般成員只看得到自己的）'))
     .addSubcommand((sub) => sub
         .setName('level')
-        .setDescription('修改自己已登記角色的等級')
+        .setDescription('修改自己角色的等級')
+        .addStringOption(identityOption)
+        .addIntegerOption(levelOption))
+    .addSubcommand((sub) => sub
+        .setName('edit')
+        .setDescription('［管理員］修改其他人角色的等級')
+        .addUserOption((option) => option
+            .setName('user')
+            .setDescription('要修改誰的角色')
+            .setRequired(true))
         .addStringOption(identityOption)
         .addIntegerOption(levelOption))
     .addSubcommand((sub) => sub
@@ -69,6 +81,10 @@ export const command = new SlashCommandBuilder()
             .setDescription('這隻角色的擁有者')
             .setRequired(true))
         .addStringOption(identityOption))
+
+//管理員限定的子指令。Discord 的預設權限是**整支指令**的門檻，
+//沒辦法逐個子指令設，所以列在這裡由 action 自己擋。
+const ADMIN_ONLY = new Set(['edit', 'set', 'remove'])
 
 const isAdmin = (ctx) => Boolean(ctx.memberPermissions?.has(PermissionFlagsBits.Administrator))
 
@@ -97,7 +113,7 @@ const clampLines = (lines, empty) => {
 //一般成員不必知道自己被擋在哪，但管理員會想知道，所以訊息寫清楚是權限問題
 const denyAdmin = async (ctx) => {
     await ctx.reply({
-        content: '只有管理員可以新增、修改角色名或刪除人員。你可以用 `/roster level` 改自己角色的等級。',
+        content: '只有管理員可以新增、修改別人的資料或刪除人員。你可以用 `/roster level` 改自己角色的等級。',
         flags: MessageFlags.Ephemeral,
     })
 }
@@ -120,29 +136,48 @@ const handleList = async (ctx) => {
     })
 }
 
-const handleLevel = async (ctx) => {
+//職業的下拉選單只能放固定選項，沒辦法「只列出你自己有的那幾隻」——
+//那需要 autocomplete，而分派器目前沒有 isAutocomplete() 的處理(見 commands/vmute 的註解)。
+//退而求其次：選錯的時候直接把他名下有哪幾隻列出來，效果一樣是「只看得到自己的」。
+const ownedHint = (userId) => {
+    const owned = listMembers(userId)
+    if(owned.length === 0) return '你目前一隻角色都沒有登記。'
+    return `你登記的是：${owned.map((item) => identityLabel(LINEUP_IDENTITY_GROUP, item.identity)).join('、')}`
+}
+
+//一般成員改自己的、管理員用 /roster edit 改別人的，共用同一段流程。
+//兩者的差別只有「改誰」與訊息裡的稱呼，規則(只改等級、不新增)完全一樣。
+const updateLevel = async (ctx, targetId, self) => {
     const identity = ctx.options.getString('identity')
     const level = ctx.options.getInteger('level')
     const label = identityLabel(LINEUP_IDENTITY_GROUP, identity)
+    const who = self ? '你' : `<@${targetId}>`
 
-    //只改自己的，而且只改已經存在的那一筆。查不到就請他找管理員 ——
-    //讓一般成員自己新增的話，職業選錯就會多出一筆永遠對不到投票的孤兒資料。
-    const result = setMemberLevel(ctx.user.id, identity, level)
+    //只改已經存在的那一筆，查不到就不動作 —— 順手建一筆的話，
+    //職業選錯就會多出一筆永遠對不到投票的孤兒資料，而且本人看不出來。
+    const result = setMemberLevel(targetId, identity, level)
 
     if(!result.ok && result.reason === 'missing'){
         await ctx.reply({
-            content: `你沒有登記「${label}」這隻角色，請找管理員用 \`/roster set\` 新增。`,
+            content: self
+                ? `你沒有登記「${label}」這隻角色。${ownedHint(targetId)}\n要新增請找管理員用 \`/roster set\`。`
+                : `<@${targetId}> 沒有登記「${label}」這隻角色。${ownedHint(targetId)}\n要新增請用 \`/roster set\`。`,
             flags: MessageFlags.Ephemeral,
+            allowedMentions: {parse: []},
         })
         return
     }
     if(!result.ok){
-        await ctx.reply({content: '寫入失敗，請稍後再試或找管理員看紀錄檔。', flags: MessageFlags.Ephemeral})
+        await ctx.reply({content: '寫入失敗，請稍後再試或看紀錄檔。', flags: MessageFlags.Ephemeral})
         return
     }
 
-    logger.info(`人員表：${ctx.user.tag} 把自己的 ${identity} 改成 ${level} 級`)
-    await ctx.reply({content: `已把你的「${label}」更新為 ${level} 級。`, flags: MessageFlags.Ephemeral})
+    logger.info(`人員表：${ctx.user.tag} 把 ${targetId} 的 ${identity} 改成 ${level} 級`)
+    await ctx.reply({
+        content: `已把${who}的「${label}」更新為 ${level} 級。`,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: {parse: []},
+    })
 }
 
 const handleSet = async (ctx) => {
@@ -201,13 +236,14 @@ export const action = async(ctx) => {
 
     const sub = ctx.options.getSubcommand()
 
-    if((sub === 'set' || sub === 'remove') && !isAdmin(ctx)){
+    if(ADMIN_ONLY.has(sub) && !isAdmin(ctx)){
         await denyAdmin(ctx)
         return
     }
 
     if(sub === 'list') await handleList(ctx)
-    else if(sub === 'level') await handleLevel(ctx)
+    else if(sub === 'level') await updateLevel(ctx, ctx.user.id, true)
+    else if(sub === 'edit') await updateLevel(ctx, ctx.options.getUser('user').id, false)
     else if(sub === 'set') await handleSet(ctx)
     else if(sub === 'remove') await handleRemove(ctx)
 }
