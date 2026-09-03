@@ -66,18 +66,33 @@ export const taipeiDateOnly = (now = Date.now()) => {
     return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
 }
 
+//月/日的短格式。討論串名稱用它，把字數留給標題。
+export const taipeiMonthDay = (now = Date.now()) =>
+    taipeiDateOnly(now).slice(5).replace('-', '/')
+
 //Discord 的討論串名稱上限 100 字元，超過會被 API 打回來
 export const MAX_THREAD_NAME = 100
 
-//討論串名稱：【投票】<標題> YYYY-MM-DD。
+//討論串名稱：【投票】<標題> <日期>。
+//日期優先用「投票選項涵蓋的範圍」(08/18~08/24，由 pollTemplate.optionDateRange 算)，
+//選項上沒有日期的投票才退回用今天。
 //太長時只截標題，日期一定留著 —— 每一輪都會開一個新串，
 //名稱裡沒有日期的話討論串清單上會出現一排一模一樣的東西。
-export const buildThreadName = (title, now = Date.now()) => {
+export const buildThreadName = (title, dateLabel = null, now = Date.now()) => {
     const prefix = '【投票】'
-    const date = taipeiDateOnly(now)
+    const date = dateLabel || taipeiMonthDay(now)
     const room = MAX_THREAD_NAME - prefix.length - date.length - 1
     const text = String(title || '').trim().slice(0, Math.max(room, 0))
     return `${prefix}${text} ${date}`
+}
+
+//開串時要提及的身分組。表是 {伺服器id: 身分組id}(同 permissionRoles，見 U07)：
+//身分組 id 綁死在單一伺服器，拿 A 伺服器的 id 去 B 一定 tag 不到人。
+//沒填到的伺服器就是不提及，不會亂 tag。
+export const resolveNoticeRole = (table, guildId) => {
+    if(!table || !guildId) return ''
+    const roleId = table[guildId]
+    return roleId ? String(roleId) : ''
 }
 
 //舊的投票紀錄沒有 thread 欄位 = 不開串。
@@ -445,7 +460,9 @@ export default {
     makePollId,
     isValidPollId,
     taipeiDateOnly,
+    taipeiMonthDay,
     buildThreadName,
+    resolveNoticeRole,
     wantsThread,
     threadParentId,
     migrateLegacyStore,

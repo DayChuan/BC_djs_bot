@@ -101,6 +101,7 @@ new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
 | `src/core/pollTemplate.js` | 模板紀錄多一個 `thread` 欄位 |
 | `src/core/pollTemplateAdmin.js` | 詳情面板加一顆切換按鈕；`action === 'tgl'` 那段加 `extra === 'thread'` 分支 |
 | `tests/pollStore.test.js` 或新增 `tests/pollThread.test.js` | 純邏輯測試 |
+| `src/config/environments/production.js` / `test.js` | `noticeRoles.poll`：開串時要提及的身分組（2026-09-03 追加，**原本不在檔案領域內，已取得使用者同意**） |
 
 **只讀，但一定要看懂的：**
 
@@ -123,10 +124,16 @@ new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
 | 函式 | 行為 |
 |---|---|
 | `taipeiDateOnly(now = Date.now())` | 台北時間的 `YYYY-MM-DD` |
+| `taipeiMonthDay(now = Date.now())` | 台北時間的 `MM/DD` |
 | `MAX_THREAD_NAME` | `100` |
-| `buildThreadName(title, now = Date.now())` | `【投票】<標題> YYYY-MM-DD`，過長只截標題，總長 ≤ 100 |
+| `buildThreadName(title, dateLabel = null, now)` | `【投票】<標題> <日期>`，`dateLabel` 留空就用今天的 `MM/DD`；過長只截標題，總長 ≤ 100 |
 | `wantsThread(poll)` | `Boolean(poll.thread)`，舊紀錄沒欄位 → `false` |
 | `threadParentId(poll)` | `poll.parentChannelId \|\| null` |
+| `resolveNoticeRole(table, guildId)` | `{伺服器id: 身分組id}` 查表，查不到回 `''` |
+
+`src/core/pollTemplate.js` 的 `optionDateRange(options, dateStart)`：
+選項涵蓋的日期範圍，短格式 `08/18~08/24`；只有一天回 `08/18`；沒有起日回 `null`。
+迄日走既有的 `endDateOf()`（不是「起日＋選項數」，同一天分早中晚時那樣會算錯）。
 
 `src/core/pollService.js` 新增私有函式 `openPollThread(client, poll)`：
 建串（`autoArchiveDuration: 10080`、`ChannelType.PublicThread`）＋ `setLocked(true)`，
@@ -141,6 +148,11 @@ new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
 `/poll` 的 `thread`（布林，掛在 `peek` 之後）走現成的 `fromTemplate()`——指令沒填才吃模板。
 draft 多帶 `thread` 與 `parentChannelId`。模板的 `thread` 由詳情面板第二列第四顆按鈕
 （`tgl` / `thread`）切換，`parseTemplateFields()` 從 `base.thread` 帶過來。
+
+**開串成功時，投票訊息本身會帶上通知身分組的提及**（`content: <@&id>` ＋
+`allowedMentions: {roles: [id]}`）。身分組 id 放在 `src/config/environments/*.js` 的
+`noticeRoles.poll`，是 `{伺服器id: 身分組id}` 對照表。**退回母頻道時不提及**，
+在既有討論串裡下 `thread:false` 的 `/poll` 也不提及。
 
 **`poll` 紀錄的兩個新欄位不需要改讀寫邏輯**：`createPoll()` / `updatePoll()` 都是整份寫檔，
 `scheduleNextRound()` 的 `...carried` 也會自動把 `thread` 與 `parentChannelId` 帶進下一輪，
@@ -168,6 +180,8 @@ draft 多帶 `thread` 與 `parentChannelId`。模板的 `thread` 由詳情面板
 **實機（測試伺服器）：**
 
 4. `/poll ... thread:true` → **開出討論串**，名稱格式正確，投票訊息在裡面
+4-1. 有 `date_start` 的投票，串名的日期是**選項涵蓋的範圍**（`08/18~08/24`）；沒有 `date_start` 的用今天（`09/03`）
+4-2. 串裡的投票訊息**提及 @龍王**（測試站是 GM 身分組），該身分組的成員收得到通知；退回母頻道的情況**不提及**
 5. 一般成員在那個討論串**打字被擋**，但**點按鈕、開個人面板、投票都正常**
 6. `/poll ... thread:false`（或不帶）→ 行為跟現在完全一樣，直接發在頻道
 7. 到期結算 → **結果貼在討論串裡**，原訊息的元件消失
@@ -209,6 +223,11 @@ pm2 restart bc-test
 - 2026-09-03　（10-1）`buildThreadName()` 過長時只截標題、日期一定保留。理由：每一輪都開新串，名稱沒有日期的話討論串清單會出現一排一模一樣的項目，管理員分不出哪個是這週的。
 - 2026-09-03　（10-2）`openPollThread()` 建串失敗時回傳「母頻道物件」而不是 `null`。理由：`sendPollMessage()` 的 `null` 語意是「頻道不存在 → 刪掉這場投票」，建串失敗若也回 `null` 會把整場投票刪掉，正好與「退回母頻道」相反。
 - 2026-09-03　（10-2）鎖定失敗只記 warn，不退回母頻道。理由：討論串已經開好、訊息還沒發，退回去只會讓頻道裡多一個空討論串，比「沒鎖上」更亂。
+- 2026-09-03　（追加）串名的日期改用**選項涵蓋的範圍**（`08/18~08/24`），選項上沒有日期才用今天。使用者決定：一眼看得出這一輪是哪幾天。格式用 `MM/DD` 短格式，把字數留給標題。
+- 2026-09-03　（追加）迄日走既有的 `endDateOf()`，不用「起日＋選項數」。理由：同一天分早中晚三段時，選項數比實際天數多，會算出一個沒涵蓋到的日期（`applyDates` 早就踩過這個坑）。
+- 2026-09-03　（追加）開串後提及通知身分組，做法是**把提及放進投票訊息的 `content`**，不另外發一則。使用者決定：討論串裡只留一則訊息比較乾淨。同時帶 `allowedMentions: {roles: [id]}`，只通知這一個身分組。
+- 2026-09-03　（追加）身分組 id 放 `config/environments/*.js` 的 `noticeRoles.poll`，是 `{伺服器id: 身分組id}` 對照表。理由：id 綁死在單一伺服器（U07 的教訓），而且正式站與測試站的值不同；沒填到的伺服器就是不提及，不會亂 tag。**正式站只填了 BCKF（`1544967637128323112`）**，第二個伺服器只開放 `/horntail`，刻意留白。
+- 2026-09-03　（追加）「有沒有開成討論串」用 `wantsThread(poll) && channel.isThread()` 判斷，不用「`channel.id` 跟 `poll.channelId` 有沒有變」。理由：每週續辦又建串失敗時，`channelId`（上一輪的討論串）跟母頻道本來就不同，用 id 比會誤判成開串成功，變成在母頻道 tag 全體；而只看 `isThread()` 又會讓「在既有討論串裡下 `thread:false` 的 `/poll`」也 tag 人。
 - 2026-09-03　（10-4）`parentChannelId` 取 `ctx.channel.isThread() ? ctx.channel.parentId : ctx.channel.id`。理由：有人會在討論串裡下 `/poll`，直接存 `ctx.channel.id` 的話那一場必定建串失敗、每次都退回母頻道。原單元檔寫「`parentChannelId: ctx.channel.id`」，漏了這個情況。
 - 2026-09-03　（10-4）開串結果寫進 `/poll` 的 ephemeral 回覆（成功貼討論串連結、失敗說明已退回母頻道）。理由：退回是靜默的，不講的話發起人只會以為參數沒作用；這也讓驗收第 10 項不必去翻 log。
 - 2026-09-03　（10-5）模板的 `thread` 不做前置條件檢查（不像 `multiChar` 要身分表）。理由：開串不依賴任何其他設定。舊模板沒有這個欄位，`!undefined` 就是 `true`，第一次按剛好是「開啟」。

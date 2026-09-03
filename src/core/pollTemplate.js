@@ -141,6 +141,22 @@ export const endDateOf = (bases, startDate) => {
     return addDays(startDate, Math.max(...offsets))
 }
 
+//選項涵蓋的日期範圍，短格式：「08/18~08/24」。討論串名稱用它。
+//只有一天(或算不出迄日)時就只回起日；沒有起日代表選項上沒有日期，回 null，
+//由呼叫端決定要用什麼替代。
+//
+//迄日一律走 endDateOf，不自己用選項數推 —— 同一天有早中晚三段時，
+//選項數比實際天數多，會算出一個根本沒涵蓋到的日期。
+export const optionDateRange = (options, dateStart) => {
+    if(!dateStart || parseDateOnly(dateStart) === null) return null
+
+    const short = (text) => text.slice(5).replace('-', '/')
+    const end = endDateOf(basesOf(options), dateStart)
+
+    if(!end || end === dateStart) return short(dateStart)
+    return `${short(dateStart)}~${short(end)}`
+}
+
 //把「星期二,星期三,...」配上日期，變成「星期二(8/18),星期三(8/19),...」。
 //
 //跨年的那一輪整批補上年份(星期二(2026/12/29) … 星期一(2027/1/4))，
@@ -397,6 +413,7 @@ export default {
     weekdayOf,
     dayOffsets,
     endDateOf,
+    optionDateRange,
     applyDates,
     buildPollOptions,
     basesOf,

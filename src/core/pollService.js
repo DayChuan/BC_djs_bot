@@ -10,12 +10,14 @@ import {
     getPoll,
     listActivePolls,
     removeVoteEntry,
+    resolveNoticeRole,
     threadParentId,
     updatePoll,
     wantsThread,
 } from '@/core/pollStore'
+import config from '@/config'
 import {archivePoll} from '@/core/pollArchive'
-import {addDays, applyDates, basesOf, refreshDatedOptions} from '@/core/pollTemplate'
+import {addDays, applyDates, basesOf, optionDateRange, refreshDatedOptions} from '@/core/pollTemplate'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
 import {ChannelType, PermissionFlagsBits} from 'discord.js'
 import {
@@ -84,7 +86,9 @@ const openPollThread = async (client, poll) => {
 
     try{
         const thread = await parent.threads.create({
-            name: buildThreadName(poll.title),
+            //名稱裡的日期用「選項涵蓋的範圍」(08/18~08/24)，
+            //選項上沒有日期的投票才退回用今天(見 buildThreadName)。
+            name: buildThreadName(poll.title, optionDateRange(poll.options, poll.dateStart)),
             //上限 7 天。每週投票的週期剛好也是 7 天，設短一點會在結算前就封存。
             autoArchiveDuration: 10080,
             type: ChannelType.PublicThread,
@@ -122,7 +126,27 @@ const sendPollMessage = async (client, poll) => {
         return null
     }
 
-    const message = await channel.send(messagePayload(poll))
+    //開在討論串裡時提及通知身分組。討論串預設不會出現在大家的頻道列表上，
+    //沒有這個提及就只有剛好點進去的人看得到 —— 那等於把投票藏起來。
+    //只在真的開成討論串時提及：退回母頻道的情況照原本的樣子發，不多 tag 一次。
+    //用 isThread() 判斷，不要用「channel.id 有沒有變」——
+    //每週續辦而且建串失敗時，channelId(上一輪的討論串)與母頻道本來就不同，
+    //那種情況拿 id 比會誤判成開串成功，變成在母頻道 tag 人。
+    //也要看 wantsThread：有人會在既有的討論串裡下 thread:false 的 /poll，
+    //那是「發在這裡就好」，不是我們開的串，不該 tag 全體。
+    const inThread = wantsThread(poll)
+        && typeof channel.isThread === 'function'
+        && channel.isThread()
+    const roleId = inThread
+        ? resolveNoticeRole(config.noticeRoles && config.noticeRoles.poll, poll.guildId)
+        : ''
+
+    const payload = messagePayload(poll)
+    const message = await channel.send(roleId
+        //allowedMentions 一定要明講：預設會把訊息裡出現的所有提及都送出去，
+        //而這裡只該通知這一個身分組。
+        ? {...payload, content: `<@&${roleId}>`, allowedMentions: {roles: [roleId]}}
+        : payload)
 
     const updated = await updatePoll(poll.id, (record) => {
         record.messageId = message.id
