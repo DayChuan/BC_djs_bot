@@ -1,7 +1,7 @@
 # U10　投票開在鎖定的討論串裡
 
-狀態：可開工（規格已確認）
-進度：0/8
+狀態：程式已完成，等測試 jail 跑 `yarn test` 與實機驗收
+進度：6/8
 依賴：無（投票系統本身早就完成並上線）
 可平行：可，但**會動到投票系統的核心檔案**，投票相關的其他改動要避開
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -116,16 +116,46 @@ new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
 
 ---
 
+## 10-1／10-2 做出來的介面（後續步驟直接用，不用再翻程式碼）
+
+`src/core/pollStore.js` 的純函式區段（**沒有任何 Discord 相依，可單元測試**）：
+
+| 函式 | 行為 |
+|---|---|
+| `taipeiDateOnly(now = Date.now())` | 台北時間的 `YYYY-MM-DD` |
+| `MAX_THREAD_NAME` | `100` |
+| `buildThreadName(title, now = Date.now())` | `【投票】<標題> YYYY-MM-DD`，過長只截標題，總長 ≤ 100 |
+| `wantsThread(poll)` | `Boolean(poll.thread)`，舊紀錄沒欄位 → `false` |
+| `threadParentId(poll)` | `poll.parentChannelId \|\| null` |
+
+`src/core/pollService.js` 新增私有函式 `openPollThread(client, poll)`：
+建串（`autoArchiveDuration: 10080`、`ChannelType.PublicThread`）＋ `setLocked(true)`，
+回傳「訊息要發到哪裡」的頻道物件 —— 建串或鎖定失敗回傳母頻道，母頻道 fetch 不到才回 `null`。
+`sendPollMessage()` 在 `wantsThread(poll)` 為真時走它，並在既有的 `updatePoll()` 裡把
+`record.channelId` 換成 `channel.id`。
+
+`src/core/pollService.js` 另有私有函式 `wakeThread(channel, pollId)`（10-3）：
+不是討論串就原樣回傳；是討論串就重抓一次（快取的 `archived` 可能是舊的），
+封存了就 `setArchived(false)`。`closePoll()` 取完頻道後套一層，其餘流程不變。
+
+`/poll` 的 `thread`（布林，掛在 `peek` 之後）走現成的 `fromTemplate()`——指令沒填才吃模板。
+draft 多帶 `thread` 與 `parentChannelId`。模板的 `thread` 由詳情面板第二列第四顆按鈕
+（`tgl` / `thread`）切換，`parseTemplateFields()` 從 `base.thread` 帶過來。
+
+**`poll` 紀錄的兩個新欄位不需要改讀寫邏輯**：`createPoll()` / `updatePoll()` 都是整份寫檔，
+`scheduleNextRound()` 的 `...carried` 也會自動把 `thread` 與 `parentChannelId` 帶進下一輪，
+所以每週續辦第二輪拿得到母頻道。
+
 ## 進度
 
-- [ ] 10-1 `pollStore` 加 `thread` / `parentChannelId` 欄位 ＋ 舊資料相容
-- [ ] 10-2 `sendPollMessage()` 建串、發訊息、鎖定、改 `channelId`；失敗退回母頻道
-- [ ] 10-3 `closePoll()` 結算前解封存
-- [ ] 10-4 `/poll` 的 `thread` 參數
-- [ ] 10-5 模板的 `thread` 欄位 ＋ 詳情面板切換按鈕
-- [ ] 10-6 討論串名稱組法與相容判斷的單元測試
-- [ ] 10-7 `yarn test` 全套通過
-- [ ] 10-8 測試伺服器實機驗收，commit
+- [x] 10-1 `pollStore` 加 `thread` / `parentChannelId` 欄位 ＋ 舊資料相容
+- [x] 10-2 `sendPollMessage()` 建串、發訊息、鎖定、改 `channelId`；失敗退回母頻道
+- [x] 10-3 `closePoll()` 結算前解封存
+- [x] 10-4 `/poll` 的 `thread` 參數
+- [x] 10-5 模板的 `thread` 欄位 ＋ 詳情面板切換按鈕
+- [x] 10-6 討論串名稱組法與相容判斷的單元測試
+- [ ] 10-7 `yarn test` 全套通過（要在測試 jail 跑，等 push 後）
+- [ ] 10-8 測試伺服器實機驗收（commit 已完成，見下方步驟）
 
 ## 驗收
 
@@ -148,6 +178,22 @@ new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
 
 **權限**：bot 需要 `建立公開討論串`、`在討論串發送訊息`、`管理討論串`。驗收前先確認測試伺服器有給。
 
+**測試 jail 的步驟**（依序，使用者代跑）：
+
+```
+/root/update.sh                     # 抓 origin/test
+cd /root/BC_djs_bot && yarn test     # 全套約 4 秒，不要單獨跑一支
+yarn deploy                          # /poll 多了 thread 參數，只重啟看不到新參數
+pm2 restart bc-test
+```
+
+`yarn deploy` 這一步**不能省**：斜線指令的參數變動要重新註冊，`commandsHash` 會自己算出內容有變並打 REST，不需要另外改任何檔案。
+
+**驗收清單第 3 項（模板切換）測不到單元測試**：切換邏輯在 `pollTemplateAdmin.js` 的
+`handleTemplateAction()`，那支 import 了 `EmbedBuilder`，測試檔不能碰。
+改成在 `tests/pollTemplate.test.js` 測 `parseTemplateFields()` 會保留 `base.thread`
+（真正會出錯的地方是「編輯模板把開關洗掉」），按鈕本身留給實機第 9 項。
+
 ## 決策紀錄
 
 - 2026-08-25　核心作法是「把 `poll.channelId` 換成討論串 id」，不另外加一套討論串專用的發送路徑。理由：三條發布路徑都走 `sendPollMessage()`，下游只認 `channelId`，改一個點就全部到位。
@@ -159,3 +205,15 @@ new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
 - 2026-08-25　**所有 `/poll` 都能開串**，不限每週投票。使用者決定：一次性投票也常被聊天洗掉。
 - 2026-08-25　`/quickpoll` 不做。理由：語音現場的快速投票開討論串沒有意義。
 - 2026-08-25　不改用 Modal 輸入身分（交接文件的寫法）。理由：現行的 ephemeral 個人面板支援多角色切換，Modal 做不到，改過去是退步。
+- 2026-09-03　（10-1）日期用「毫秒 +8 小時再取 UTC 欄位」算，不用 `Intl` / locale。理由：台灣沒有日光節約，時差固定，而 `Intl` 的行為會被執行環境的 ICU 資料完整度影響（模板列表的中文定序踩過同一個坑）。
+- 2026-09-03　（10-1）`buildThreadName()` 過長時只截標題、日期一定保留。理由：每一輪都開新串，名稱沒有日期的話討論串清單會出現一排一模一樣的項目，管理員分不出哪個是這週的。
+- 2026-09-03　（10-2）`openPollThread()` 建串失敗時回傳「母頻道物件」而不是 `null`。理由：`sendPollMessage()` 的 `null` 語意是「頻道不存在 → 刪掉這場投票」，建串失敗若也回 `null` 會把整場投票刪掉，正好與「退回母頻道」相反。
+- 2026-09-03　（10-2）鎖定失敗只記 warn，不退回母頻道。理由：討論串已經開好、訊息還沒發，退回去只會讓頻道裡多一個空討論串，比「沒鎖上」更亂。
+- 2026-09-03　（10-4）`parentChannelId` 取 `ctx.channel.isThread() ? ctx.channel.parentId : ctx.channel.id`。理由：有人會在討論串裡下 `/poll`，直接存 `ctx.channel.id` 的話那一場必定建串失敗、每次都退回母頻道。原單元檔寫「`parentChannelId: ctx.channel.id`」，漏了這個情況。
+- 2026-09-03　（10-4）開串結果寫進 `/poll` 的 ephemeral 回覆（成功貼討論串連結、失敗說明已退回母頻道）。理由：退回是靜默的，不講的話發起人只會以為參數沒作用；這也讓驗收第 10 項不必去翻 log。
+- 2026-09-03　（10-5）模板的 `thread` 不做前置條件檢查（不像 `multiChar` 要身分表）。理由：開串不依賴任何其他設定。舊模板沒有這個欄位，`!undefined` 就是 `true`，第一次按剛好是「開啟」。
+- 2026-09-03　（10-6）新增 `tests/pollThread.test.js`，並在 `tests/pollTemplate.test.js` 補兩個 case。理由：前者測 pollStore 的純函式，後者測「編輯模板不會洗掉切換按鈕設的值」——`tests/pollTemplate.test.js` 不在原單元檔的檔案清單裡，已取得使用者同意。
+- 2026-09-03　（10-3）解封存前先 `channel.fetch()` 重抓。理由：`archived` 是快取值，封存發生在 bot 離線期間時快取會是舊的（開機還原後補結算正好是這種情況），照舊值判斷就會略過解封存。
+- 2026-09-03　（10-3）解封存失敗只記 error、不中斷結算。理由：後面的排下一輪與歸檔不依賴頻道，停在這裡會讓每週投票直接斷掉下一輪；編輯訊息與貼結果本來就各自有 try/catch。
+- 2026-09-03　（10-3）只有 `closePoll()` 解封存，`cancelPoll()` / `applyPollEdit()` 不做。理由：那兩條路失敗只會讓一則舊訊息沒更新，不像結算會連帶影響下一輪與歸檔；等實機看到真的有問題再加。
+- 2026-09-03　（10-2）`thread` 為真但缺 `parentChannelId` 時，記 error 後改用 `channelId` 當母頻道。理由：這種紀錄理論上不存在（`/poll` 一定會帶、續辦會整份複製），真的遇到時「投票發得出去」比「一定發在討論串」重要。

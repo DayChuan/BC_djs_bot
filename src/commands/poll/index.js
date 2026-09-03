@@ -78,6 +78,9 @@ command
     .addBooleanOption((option) => option
         .setName('peek')
         .setDescription('是否開放所有人中途查看結果（預設是；設否則只有管理員能用 /poll_admin）'))
+    .addBooleanOption((option) => option
+        .setName('thread')
+        .setDescription('是否開在鎖定的討論串裡，避免被聊天洗掉（按鈕與面板不受鎖定影響）'))
     .addIntegerOption((option) => option
         .setName('hours')
         .setDescription(`幾小時後截止（預設 ${DEFAULT_HOURS} 小時，每週重複時此項無效）`)
@@ -210,6 +213,13 @@ export const action = async(ctx) => {
         || null
     const multiChar = Boolean(fromTemplate(ctx.options.getBoolean('multi_char'), 'multiChar', false))
     const peek = Boolean(fromTemplate(ctx.options.getBoolean('peek'), 'peek', true))
+    const thread = Boolean(fromTemplate(ctx.options.getBoolean('thread'), 'thread', false))
+
+    //建串要用的是「頻道」，不是討論串 —— 討論串裡不能再開討論串。
+    //有人會在討論串裡下 /poll，此時取它的母頻道，否則每一場都會退回而開不了串。
+    const parentChannelId = (ctx.channel.isThread && ctx.channel.isThread())
+        ? ctx.channel.parentId
+        : ctx.channel.id
 
     //一人多角色的意義是「同一個人用不同身分報名」，沒有身分表就沒有意義：
     //面板會出現一堆分不出誰是誰的「第 N 筆」，結算名單也無從分組。
@@ -240,6 +250,9 @@ export const action = async(ctx) => {
         identityGroup,
         multiChar,
         peek,
+        thread,
+        //每週續辦時 channelId 已經是上一輪的討論串，所以母頻道要另外存
+        parentChannelId,
         weekly: weeklyConfig,
         createdBy: ctx.user.id,
         openAt: null,
@@ -254,7 +267,8 @@ export const action = async(ctx) => {
 
     logger.info(
         `建立投票：${poll.id}「${poll.title}」by=${ctx.user.tag} 選項數=${options.length} ` +
-        `模板=${template ? template.name : '無'} 起日=${dateStart || '無'}`
+        `模板=${template ? template.name : '無'} 起日=${dateStart || '無'} ` +
+        `討論串=${thread ? '開' : '關'}`
     )
 
     const lines = [`投票已發出，共 ${options.length} 個選項。`]
@@ -273,10 +287,17 @@ export const action = async(ctx) => {
     if(multiChar){
         lines.push('已開啟一人多角色：投票者可以在面板上按「新增角色」登記第二隻以後的角色。')
     }
+    //開串成功與否直接寫在回覆裡。權限不足時的行為是「退回母頻道」而不是報錯，
+    //不講的話發起人只會覺得這個參數沒作用，還得去翻 log 才知道原因。
+    if(thread){
+        lines.push(poll.channelId === parentChannelId
+            ? '⚠️ 討論串建立失敗（我可能缺「建立公開討論串」權限），投票已直接發在本頻道。'
+            : `投票開在討論串 <#${poll.channelId}> 裡：一般成員在裡面不能發言，但投票與面板都正常。`)
+    }
     lines.push(peek
         ? '所有人都可以按投票訊息上的按鈕查看目前結果（只有自己看得到）。'
         : '中途結果不公開，只有管理員能用 `/poll_admin` 查看。')
-    lines.push('要提早結束可以用 `/poll_admin` 選這場再按「提早結算」。結算後結果會貼在這個頻道。')
+    lines.push('要提早結束可以用 `/poll_admin` 選這場再按「提早結算」。結算後結果會貼在投票所在的頻道。')
 
     await ctx.editReply(lines.join('\n'))
 }

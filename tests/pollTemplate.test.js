@@ -474,6 +474,18 @@ describe('parseTemplateFields', () => {
     it('新建時預設開放中途查看', () => {
         expect(tpl.parseTemplateFields(fields()).template.peek).toBe(true)
     })
+
+    //U10：討論串開關跟 multi 一樣是切換按鈕改的，Modal 裡沒有這一格，
+    //所以只要沒從 base 帶過來，編輯一次模板就會被洗掉。
+    it('編輯時保留討論串開關', () => {
+        const existing = {id: 't_abc', options: ['甲', '乙'], thread: true}
+        expect(tpl.parseTemplateFields(fields(), existing).template.thread).toBe(true)
+    })
+
+    it('沒有 thread 欄位的舊模板視為不開串', () => {
+        expect(tpl.parseTemplateFields(fields()).template.thread).toBe(false)
+        expect(tpl.parseTemplateFields(fields(), {id: 't_abc'}).template.thread).toBe(false)
+    })
 })
 
 describe('isValidTemplateId', () => {

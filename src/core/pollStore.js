@@ -53,6 +53,41 @@ export const parseOptionsInput = (text) => {
     return options.slice(0, MAX_OPTIONS)
 }
 
+/////////////////////////// 討論串 ///////////////////////////
+
+//台北時間的日期。台灣沒有日光節約，時差固定 +8，
+//所以直接加毫秒再取 UTC 欄位就夠了 —— 不繞 Intl／locale，
+//免得像中文定序那次一樣被執行環境的 ICU 資料完整度影響。
+const TAIPEI_OFFSET_MS = 8 * 60 * 60 * 1000
+
+export const taipeiDateOnly = (now = Date.now()) => {
+    const date = new Date(now + TAIPEI_OFFSET_MS)
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
+}
+
+//Discord 的討論串名稱上限 100 字元，超過會被 API 打回來
+export const MAX_THREAD_NAME = 100
+
+//討論串名稱：【投票】<標題> YYYY-MM-DD。
+//太長時只截標題，日期一定留著 —— 每一輪都會開一個新串，
+//名稱裡沒有日期的話討論串清單上會出現一排一模一樣的東西。
+export const buildThreadName = (title, now = Date.now()) => {
+    const prefix = '【投票】'
+    const date = taipeiDateOnly(now)
+    const room = MAX_THREAD_NAME - prefix.length - date.length - 1
+    const text = String(title || '').trim().slice(0, Math.max(room, 0))
+    return `${prefix}${text} ${date}`
+}
+
+//舊的投票紀錄沒有 thread 欄位 = 不開串。
+//在這裡就把 undefined 收斂成布林，呼叫端才不必到處防 undefined。
+export const wantsThread = (poll) => Boolean(poll && poll.thread)
+
+//建串一律用母頻道。每週續辦時 poll.channelId 已經是「上一輪的討論串」，
+//拿它去建串會失敗 —— 討論串裡不能再開討論串。
+export const threadParentId = (poll) => (poll && poll.parentChannelId) || null
+
 //一個人最多能登記幾個角色。純粹是防呆上限 ——
 //沒有上限的話一個人可以按到幾百筆，把結算報表塞爆。
 export const MAX_ENTRIES_PER_USER = 10
@@ -409,6 +444,10 @@ export default {
     parseOptionsInput,
     makePollId,
     isValidPollId,
+    taipeiDateOnly,
+    buildThreadName,
+    wantsThread,
+    threadParentId,
     migrateLegacyStore,
     resetCache,
 }

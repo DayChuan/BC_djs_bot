@@ -137,6 +137,7 @@ export const buildTemplateDetail = (template, {notice = ''} = {}) => {
             {name: '複選', value: template.multi ? '開啟' : '關閉', inline: true},
             {name: '一人多角色', value: template.multiChar ? '開啟' : '關閉', inline: true},
             {name: '中途查看', value: template.peek === false ? '僅管理員' : '所有人', inline: true},
+            {name: '討論串', value: template.thread ? '開啟' : '關閉', inline: true},
         )
 
     if(template.startDate){
@@ -158,8 +159,9 @@ export const buildTemplateDetail = (template, {notice = ''} = {}) => {
                 new ButtonBuilder().setCustomId(templateId('home'))
                     .setLabel('◀ 回模板列表').setStyle(ButtonStyle.Secondary),
             ),
-            //三個開關不放進 Modal —— Modal 只有五格，已經被名稱、選項、起日、
+            //這幾個開關不放進 Modal —— Modal 只有五格，已經被名稱、選項、起日、
             //身分表、每週設定佔滿了。開關用按鈕直接切，也比在文字框裡打 true/false 好用。
+            //(一列最多五顆按鈕，還有空間)
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'multi'))
                     .setLabel(`複選：${template.multi ? '開' : '關'}`).setStyle(ButtonStyle.Secondary),
@@ -168,6 +170,8 @@ export const buildTemplateDetail = (template, {notice = ''} = {}) => {
                 new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'peek'))
                     .setLabel(`中途查看：${template.peek === false ? '僅管理員' : '所有人'}`)
                     .setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'thread'))
+                    .setLabel(`討論串：${template.thread ? '開' : '關'}`).setStyle(ButtonStyle.Secondary),
             ),
         ],
     }
@@ -272,6 +276,9 @@ export const handleTemplateAction = async (interaction, {action, id, extra}) => 
 
         if(extra === 'multi') template.multi = !template.multi
         else if(extra === 'peek') template.peek = template.peek === false
+        //開串不需要前置條件(不像 multiChar 要身分表)，所以直接反轉。
+        //舊模板沒有這個欄位，undefined 反轉後就是 true，正好是「第一次按=開啟」。
+        else if(extra === 'thread') template.thread = !template.thread
         else if(extra === 'multiChar'){
             //沒有身分表就開不了一人多角色(同 /poll 的規則)。
             //讓它開起來的話，套用模板時會在建立階段才被擋下來。

@@ -2,6 +2,7 @@ import logger from '@/core/logger'
 import scheduler, {nextWeeklyDate} from '@/core/scheduler'
 import {
     addVoteEntry,
+    buildThreadName,
     castVote,
     createPoll,
     deletePoll,
@@ -9,12 +10,14 @@ import {
     getPoll,
     listActivePolls,
     removeVoteEntry,
+    threadParentId,
     updatePoll,
+    wantsThread,
 } from '@/core/pollStore'
 import {archivePoll} from '@/core/pollArchive'
 import {addDays, applyDates, basesOf, refreshDatedOptions} from '@/core/pollTemplate'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
-import {PermissionFlagsBits} from 'discord.js'
+import {ChannelType, PermissionFlagsBits} from 'discord.js'
 import {
     ADMIN_PREFIX,
     applyEdit,
@@ -54,11 +57,65 @@ const fetchChannel = async (client, channelId) => {
 
 /////////////////////////////// 發布 ///////////////////////////////
 
+//為一場投票開一個鎖定的討論串，回傳「訊息要發到哪裡」。
+//
+//母頻道一律取 parentChannelId：每週續辦時 poll.channelId 已經是上一輪的
+//討論串，拿它建串必定失敗(討論串裡不能再開討論串)。
+//
+//建串或鎖定失敗時退回母頻道，不讓整場投票發不出來 ——
+//投票本身比「發在討論串」重要得多，鎖不起來也只是會被聊天洗。
+const openPollThread = async (client, poll) => {
+    let parentId = threadParentId(poll)
+
+    if(!parentId){
+        //理論上不會發生(/poll 一定會帶，續辦會整份複製)。
+        //真的缺了就當 channelId 是母頻道，至少投票發得出去。
+        logger.error(`投票 ${poll.id} 要開討論串卻沒有 parentChannelId，改用 channelId ${poll.channelId}`)
+        parentId = poll.channelId
+    }
+
+    const parent = await fetchChannel(client, parentId)
+    if(!parent) return null
+
+    if(typeof (parent.threads && parent.threads.create) !== 'function'){
+        logger.error(`投票 ${poll.id} 的頻道 ${parentId} 不支援討論串，改發在該頻道`)
+        return parent
+    }
+
+    try{
+        const thread = await parent.threads.create({
+            name: buildThreadName(poll.title),
+            //上限 7 天。每週投票的週期剛好也是 7 天，設短一點會在結算前就封存。
+            autoArchiveDuration: 10080,
+            type: ChannelType.PublicThread,
+            reason: `投票 ${poll.id}`,
+        })
+
+        //鎖定只擋發訊息，不擋按鈕與面板互動，所以投票流程完全不受影響。
+        //鎖失敗不回頭 —— 討論串已經開好了，退回母頻道反而更亂。
+        await thread.setLocked(true).catch((e) => {
+            logger.warn(`投票 ${poll.id} 的討論串鎖定失敗(缺 ManageThreads?)，維持未鎖定：`, e)
+        })
+
+        return thread
+    }
+    catch(e){
+        logger.error(`投票 ${poll.id} 建立討論串失敗(缺 CreatePublicThreads?)，退回母頻道 ${parentId}：`, e)
+        return parent
+    }
+}
+
 //把一場投票送進頻道，並排好截止時間。
 //poll 必須已經寫進 polls/ —— 先落盤再送訊息，
 //反過來的話送出訊息後當機，頻道裡就會留下一則永遠不會結算的殭屍投票。
+//
+//開討論串時把 channelId 換成討論串 id 就結束了：結算、編輯、取消、開機還原
+//全都只認 channelId，討論串在 Discord 也就是一種頻道，所以它們自動跟著走。
 const sendPollMessage = async (client, poll) => {
-    const channel = await fetchChannel(client, poll.channelId)
+    const channel = wantsThread(poll)
+        ? await openPollThread(client, poll)
+        : await fetchChannel(client, poll.channelId)
+
     if(!channel){
         logger.error(`投票 ${poll.id} 找不到頻道 ${poll.channelId}，取消這場投票`)
         await deletePoll(poll.id)
@@ -70,11 +127,14 @@ const sendPollMessage = async (client, poll) => {
     const updated = await updatePoll(poll.id, (record) => {
         record.messageId = message.id
         record.status = 'open'
+        //發在討論串時才會不一樣。下游全部改認新的 channelId。
+        if(channel.id !== record.channelId) record.channelId = channel.id
     })
 
     scheduler.scheduleAt(closeKey(poll.id), new Date(poll.closeAt), () => closePoll(client, poll.id))
     logger.info(
-        `投票已發布：${poll.id}「${poll.title}」channel=${poll.channelId} ` +
+        `投票已發布：${poll.id}「${poll.title}」channel=${channel.id} ` +
+        `thread=${wantsThread(poll) ? 'yes' : 'no'} ` +
         `close=${poll.closeAt} weekly=${poll.weekly ? 'yes' : 'no'}`
     )
 
@@ -161,6 +221,32 @@ const scheduleNextRound = async (client, poll) => {
     return next
 }
 
+//討論串封存之後，編輯訊息與發訊息都會失敗。
+//自動封存上限是 7 天，而每週投票的週期剛好也是 7 天 ——
+//結算就正好踩在那條邊界上，少了這一步會變成最難查的那種偶發故障。
+//
+//不是討論串就原樣回傳，呼叫端不必自己判斷型別。
+const wakeThread = async (channel, pollId) => {
+    if(!channel || typeof channel.isThread !== 'function' || !channel.isThread()) return channel
+
+    //快取裡的 archived 可能是舊的(封存事件發生時 bot 不一定在線)，
+    //所以重抓一次才問得到真實狀態。抓失敗就用手上這個繼續。
+    const fresh = await channel.fetch().catch(() => channel)
+    if(!fresh.archived) return fresh
+
+    try{
+        await fresh.setArchived(false)
+        logger.info(`投票 ${pollId} 的討論串已封存，結算前先解除封存`)
+    }
+    catch(e){
+        //解不開就照原流程走：編輯與貼結果會失敗，但那兩步本來就各自有容錯，
+        //不該讓整場結算(排下一輪、歸檔)跟著停住。
+        logger.error(`投票 ${pollId} 的討論串解除封存失敗(缺 ManageThreads?)，結果可能貼不進去：`, e)
+    }
+
+    return fresh
+}
+
 export const closePoll = async (client, pollId) => {
     //先在佇列裡把狀態改成 closed。同一瞬間有第二個結算進來時，
     //它看到的就已經是 closed，會直接放棄，不會重複貼結果。
@@ -182,7 +268,8 @@ export const closePoll = async (client, pollId) => {
         return null
     }
 
-    const channel = await fetchChannel(client, poll.channelId)
+    //poll.channelId 可能是討論串(見發布那段)，封存了就先解開再貼結果
+    const channel = await wakeThread(await fetchChannel(client, poll.channelId), pollId)
 
     //原訊息可能已被刪除。刪掉就算了，重點是結果要貼得出來，
     //所以這裡失敗只記錄，不中斷後面的流程。
