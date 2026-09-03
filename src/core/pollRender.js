@@ -315,7 +315,7 @@ export const buildResultMessage = (poll, {live = false} = {}) => {
 
     const header = []
     if(poll.description) header.push(poll.description)
-    //由高到低排，最上面那個就是結論
+    //只有「最高票是誰」這個結論需要排序，下面的清單維持原本的選項順序。
     const ranked = [...result.options].sort((a, b) => b.count - a.count)
     const top = ranked[0]
     if(top.count > 0){
@@ -326,7 +326,10 @@ export const buildResultMessage = (poll, {live = false} = {}) => {
     }
     embed.setDescription(header.join('\n\n'))
 
-    for(const option of ranked.slice(0, MAX_FIELDS)){
+    //2026-09-03 改為照選項原本的順序列出，不再由高到低排。
+    //選項多半是日期，照原順序就是照時間先後，對照行事曆時好讀得多；
+    //「哪個最高」上面那行結論已經講了，這裡再排一次反而失去時間軸。
+    for(const option of result.options.slice(0, MAX_FIELDS)){
         embed.addFields({
             name: clamp(`${option.label}　${option.count} 票（${option.percent}%）`, MAX_FIELD_NAME),
             value: clamp(formatVoters(poll, option), MAX_FIELD_VALUE),
