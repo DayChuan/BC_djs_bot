@@ -24,6 +24,7 @@
 | [U06](./units/U06-drive-readonly.md) | `/drive` NAS 檔案瀏覽（唯讀） | 未開始 | 0/8 | — | **可，完全獨立** |
 | [U07](./units/U07-multi-guild.md) | 跨多伺服器的設定維護 | 窄版完成，整體擱置 | — | — | — |
 | [U10](./units/U10-poll-thread.md) | 投票開在鎖定的討論串裡 | **可開工** | 0/8 | — | 可（但會動投票核心） |
+| [U11](./units/U11-lineup.md) | 楓之谷出團名單（人員表 ＋ 自動分隊） | **可開工** | 0/9 | — | 可 |
 
 已完成的單元收在 [units/done.md](./units/done.md)，平常不需要讀。
 
