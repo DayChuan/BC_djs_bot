@@ -31,6 +31,16 @@ const identityOption = (option) => option
     .addChoices(...identityGroups[LINEUP_IDENTITY_GROUP].options
         .map((item) => ({name: item.label, value: item.value})))
 
+//level 專用：只建議「自己名下已經登記過的角色」。
+//Discord 規定 choices 與 autocomplete 互斥，所以這一支不能用 addChoices，
+//也代表使用者可以自己打任何字進來 —— 驗證仍然由 updateLevel() 負責
+//(它查不到那筆就回「你沒有登記這隻角色」，不會亂建資料)。
+const ownIdentityOption = (option) => option
+    .setName('identity')
+    .setDescription('職業（只會建議你已經登記過的角色）')
+    .setRequired(true)
+    .setAutocomplete(true)
+
 const levelOption = (option) => option
     .setName('level')
     .setDescription('角色等級')
@@ -48,7 +58,7 @@ export const command = new SlashCommandBuilder()
     .addSubcommand((sub) => sub
         .setName('level')
         .setDescription('修改自己角色的等級')
-        .addStringOption(identityOption)
+        .addStringOption(ownIdentityOption)
         .addIntegerOption(levelOption))
     .addSubcommand((sub) => sub
         .setName('edit')
@@ -226,6 +236,39 @@ const handleRemove = async (ctx) => {
         flags: MessageFlags.Ephemeral,
         allowedMentions: {parse: []},
     })
+}
+
+/**
+ * `/roster level` 的職業建議：只列**這個人自己登記過的**角色。
+ *
+ * 一般成員名下通常只有一兩隻，從 12 個職業裡自己找又慢又容易選錯
+ * （選錯的結果是「你沒有登記這隻角色」，看起來像功能壞了）。
+ *
+ * 三個硬限制：只能 respond()、3 秒內要回、最多 25 筆。
+ * 這裡全部從記憶體裡的人員表算，不碰網路，不會超時。
+ */
+export const autocomplete = async(ctx) => {
+    const focused = ctx.options.getFocused(true)
+    if(focused.name !== 'identity'){
+        await ctx.respond([])
+        return
+    }
+
+    const keyword = String(focused.value || '').trim().toLowerCase()
+    const owned = listMembers(ctx.user.id)
+
+    const choices = owned
+        .map((member) => ({
+            name: `${identityLabel(LINEUP_IDENTITY_GROUP, member.identity)}　${member.name}　` +
+                //store.list() 的 level 是 number 或 null，不是 UNKNOWN_LEVEL
+                `${member.level === null ? UNKNOWN_LEVEL : `${member.level} 級`}`,
+            value: member.identity,
+        }))
+        //比對職業標籤與角色名，兩邊都讓人搜得到
+        .filter((choice) => !keyword || choice.name.toLowerCase().includes(keyword))
+        .slice(0, 25)
+
+    await ctx.respond(choices)
 }
 
 export const action = async(ctx) => {

@@ -36,6 +36,10 @@ export const event = {
 //而這個函式是在 catch 裡被呼叫的，外面沒有人接手，所以它自己也要包 try/catch，
 //絕對不能再往外拋(ISSUES.md 的 C-03 就是錯誤處理自己爆炸)。
 const safeRespond = async(interaction, content) => {
+    //autocomplete 沒有「回覆」這回事，只能 respond()。
+    //在這裡誤呼叫 reply 會再拋一個錯，把原本的錯誤蓋掉。
+    if(interaction.isAutocomplete && interaction.isAutocomplete()) return
+
     try{
         const payload = {content, flags: MessageFlags.Ephemeral}
         if(interaction.deferred || interaction.replied) await interaction.followUp(payload)
@@ -255,8 +259,39 @@ const handleHorntail = async(interaction, parsed) => {
     await interaction.deferUpdate()
 }
 
+/**
+ * 指令參數的動態建議（autocomplete）。
+ *
+ * 這一支跟其他互動有三個不一樣的地方，寫錯會很難查：
+ *  1. **只能用 interaction.respond()**，不能 reply / deferReply。
+ *  2. **必須在 3 秒內回應**，所以處理函式裡不要打外部 API。
+ *  3. **最多 25 筆**，超過 Discord 直接整包退回。
+ *
+ * 出錯時回一個空陣列就好 —— 使用者看到的是「沒有建議」，
+ * 而不是一個壞掉的選單，而且他仍然可以自己打字送出。
+ */
+const handleAutocomplete = async(interaction) => {
+    const map = appStore.autocompleteMap
+    const handler = map ? map.get(interaction.commandName) : null
+    if(typeof handler !== 'function') return
+
+    try{
+        await handler(interaction)
+    }
+    catch(e){
+        logger.error(`autocomplete 失敗：${interaction.commandName}`, e)
+        await interaction.respond([]).catch(() => undefined)
+    }
+}
+
 export const action = async(interaction) => {
     try{
+        //排在最前面：autocomplete 的回應方式跟其他互動完全不同，
+        //掉進下面任何一個分支都會拋 InteractionNotReplied 之類的錯。
+        if(interaction.isAutocomplete()){
+            await handleAutocomplete(interaction)
+            return
+        }
         if(interaction.isChatInputCommand()){
             await handleChatInputCommand(interaction)
             return

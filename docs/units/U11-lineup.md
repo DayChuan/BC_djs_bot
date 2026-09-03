@@ -199,6 +199,9 @@ data/roster.json（不進版控）
 - [x] 11-7 前兩高票、平手全列（`lineup.pickTopOptions()`）
 - [ ] 11-8 `yarn test` 全套通過　←　要在測試 jail 跑，步驟見下方
 - [ ] 11-9 測試伺服器實機驗收，commit
+- [ ] 11-10 補驗 autocomplete：`/roster level` 打職業時**只出現自己登記過的角色**，
+      名單顯示「職業　角色名　等級」；沒登記任何角色的人打開它是空的；
+      選一個之後改等級成功。管理員的 `set`／`edit`／`remove` 仍是完整的 12 個選項
 
 ## 驗收
 
@@ -270,8 +273,13 @@ data/roster.json（不進版控）
 - 2026-09-03　管理員改別人等級的指令做成扁平的 `/roster edit`，**不做 `/roster edit level` 這種子指令群組**。
   理由：`core/helpText.js` 只認 type 1 的子指令，群組（type 2）會從 `/help` 裡靜靜消失，
   而 `helpText.js` 與它的測試都在 U11 的檔案領域外。
-- 2026-09-03　`/roster level` 的職業選單仍列全部 12 個職業，改用「選錯時把你名下的角色列出來」代替。
-  理由：只列自己的需要 autocomplete，得改 `events/interactionCreate/`（目前無此分派），超出檔案領域。
+- 2026-09-03　~~`/roster level` 的職業選單仍列全部 12 個職業~~
+  **2026-09-04 由專案經理補做**：autocomplete 的地基已經建好（`loader` 收 `autocomplete` 匯出、
+  `appStore.autocompleteMap`、`interactionCreate` 的 `isAutocomplete()` 分派），
+  `/roster level` 的 `identity` 改為只建議「自己名下已登記的角色」。
+  Discord 的 choices 與 autocomplete 互斥，所以那個參數不再有固定清單——
+  使用者可以自己打任何字，但 `updateLevel()` 查不到就回「你沒有登記這隻角色」，不會亂建資料。
+  `set` / `edit` / `remove` 維持原本的 12 個 choices（那是幫**別人**選，不能只列自己的）。
 
 ---
 

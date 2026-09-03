@@ -27,12 +27,16 @@ export const collectCommands = async() => {
     const files = await fg(`${ROOT}/src/commands/**/index.js`, {absolute: true})
     const commands = []
     const actions = new Collection()
+    //指令檔可以另外匯出一個 autocomplete 函式，有匯出才登記。
+    //Discord 的規定：autocomplete 必須在 3 秒內回應、最多回 25 筆。
+    const autocompletes = new Collection()
     for(const file of files){
         const cmd = await import(file)
         commands.push(cmd.command)
         actions.set(cmd.command.name, cmd.action)
+        if(typeof cmd.autocomplete === 'function') autocompletes.set(cmd.command.name, cmd.autocomplete)
     }
-    return {commands, actions}
+    return {commands, actions, autocompletes}
 }
 
 //建立「指令名稱 → 處理函式」的對照表，供 interactionCreate 分派用。
@@ -44,12 +48,13 @@ export const collectCommands = async() => {
 //順帶把每次重啟都無條件打的 PUT applicationGuildCommands 一併省掉
 //(正式站兩個伺服器 = 兩倍呼叫，crash loop 時還會反覆打同一個端點吃 429)。
 export const loadCommands = async() => {
-    const {commands, actions} = await collectCommands()
+    const {commands, actions, autocompletes} = await collectCommands()
     appStore.commandActionMap = actions
+    appStore.autocompleteMap = autocompletes
     //供 /help 列出指令清單用
     appStore.commandList = commands
 
-    logger.info(`指令載入完成：${commands.length} 個指令`)
+    logger.info(`指令載入完成：${commands.length} 個指令（${autocompletes.size} 個帶 autocomplete）`)
 }
 
 export const loadEvents = async() => {

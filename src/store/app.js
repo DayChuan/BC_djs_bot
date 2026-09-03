@@ -6,6 +6,9 @@
 export const appStore = {
     client: null,
     commandActionMap: null,
+    //指令名稱 → autocomplete 處理函式。只有需要動態建議的指令才會登記，
+    //所以這張表通常比 commandActionMap 小很多。
+    autocompleteMap: null,
     //指令的 SlashCommandBuilder 清單。/help 靠它列出使用者能用的指令，
     //所以 loadCommands() 註冊完要順手放進來。
     commandList: null
