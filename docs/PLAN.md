@@ -28,6 +28,8 @@
 
 已完成的單元收在 [units/done.md](./units/done.md)，平常不需要讀。
 
+還沒成為單元的想法收在 [units/BACKLOG.md](./units/BACKLOG.md)。
+
 ## 現在可以同時開的
 
 - **`U10`**（投票開討論串，規格已確認）
