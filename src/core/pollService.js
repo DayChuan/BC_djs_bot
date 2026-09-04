@@ -172,6 +172,7 @@ const sendPollMessage = async (client, poll) => {
     //❎ 與截止前提醒只在組隊模式下做(2026-09-04)。
     //一般投票(臨時問大家吃什麼)被按上 ❎、又在截止前被 tag，是純粹的噪音。
     //快速投票天然不會進來：它壽命只有幾分鐘，模板與 /poll 的 raid 都碰不到它。
+    //(scheduleReminders 自己也會擋一次，這裡留著是為了省下按 ❎ 那一次 API 呼叫。)
     if(wantsRaid(poll)){
         //提醒排程要用 updated —— messageId 與(開串時)新的 channelId 都在那上面，
         //提醒時要靠它們把訊息抓回來讀 ❎。
@@ -241,6 +242,12 @@ const remindAt = (poll, hours) => new Date(new Date(poll.closeAt).getTime() - ho
 //少了這道判斷，重啟一次就會補送一則三小時前該發的提醒 —— 只會讓人困惑。
 const scheduleReminders = (client, poll, now = Date.now()) => {
     if(!poll || !poll.closeAt) return 0
+
+    //閘門放在函式裡面，不放在呼叫端。
+    //發布時的呼叫點本來就包在 wantsRaid() 裡，但 restorePolls() 是無條件呼叫的 ——
+    //只擋發布那一處的話，bot 每重啟一次就會把非組隊投票的提醒重新掛回去，
+    //而且要等到提醒真的發出去才會有人發現。
+    if(!wantsRaid(poll)) return 0
 
     let scheduled = 0
     for(const hours of REMIND_HOURS){
