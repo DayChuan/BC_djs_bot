@@ -138,6 +138,7 @@ export const buildTemplateDetail = (template, {notice = ''} = {}) => {
             {name: '一人多角色', value: template.multiChar ? '開啟' : '關閉', inline: true},
             {name: '中途查看', value: template.peek === false ? '僅管理員' : '所有人', inline: true},
             {name: '討論串', value: template.thread ? '開啟' : '關閉', inline: true},
+            {name: '組隊模式', value: template.raid ? '開啟' : '關閉', inline: true},
         )
 
     if(template.startDate){
@@ -172,6 +173,8 @@ export const buildTemplateDetail = (template, {notice = ''} = {}) => {
                     .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'thread'))
                     .setLabel(`討論串：${template.thread ? '開' : '關'}`).setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(templateId('tgl', template.id, 'raid'))
+                    .setLabel(`組隊模式：${template.raid ? '開' : '關'}`).setStyle(ButtonStyle.Secondary),
             ),
         ],
     }
@@ -279,6 +282,7 @@ export const handleTemplateAction = async (interaction, {action, id, extra}) => 
         //開串不需要前置條件(不像 multiChar 要身分表)，所以直接反轉。
         //舊模板沒有這個欄位，undefined 反轉後就是 true，正好是「第一次按=開啟」。
         else if(extra === 'thread') template.thread = !template.thread
+        else if(extra === 'raid') template.raid = !template.raid
         else if(extra === 'multiChar'){
             //沒有身分表就開不了一人多角色(同 /poll 的規則)。
             //讓它開起來的話，套用模板時會在建立階段才被擋下來。

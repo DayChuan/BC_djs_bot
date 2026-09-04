@@ -6,6 +6,7 @@ import {
     StringSelectMenuBuilder,
 } from 'discord.js'
 import {getIdentityGroup, identityLabel} from '@/config/pollIdentities'
+import {OPT_OUT_EMOJI} from '@/config/polls'
 import {LINEUP_IDENTITY_GROUP, MISSING_LABEL, UNKNOWN_LEVEL} from '@/config/lineup'
 import {buildLineup, pickTopOptions} from '@/core/lineup'
 import {getEntries, MAX_ENTRIES_PER_USER, tally} from '@/core/pollStore'
@@ -438,6 +439,54 @@ export const buildLineupMessages = (poll, {roster = null, displayNames = {}} = {
     const table = roster || getMembers()
 
     return picked.flatMap((option) => splitLines(lineupLines(poll, option, table, displayNames)))
+}
+
+/////////////////////////// 截止前提醒 ///////////////////////////
+
+/**
+ * 截止前提醒。回傳**訊息內容的陣列**，呼叫端逐則送出（同 buildLineupMessages）。
+ *
+ * 一則訊息 2000 字元，一個提及約 22 字元，大約 80 人就會爆掉，所以超過就分則發。
+ * 不改成「只提及身分組 ＋ 一句還沒投的有 N 位」——那樣已經投過的人也會被叫一次，
+ * 而這個功能的重點正是「只吵還沒表態的人」。
+ *
+ * 名單為空時回空陣列，呼叫端據此完全不發訊息（不發「大家都投完了」，那也是洗版）。
+ *
+ * 名單怎麼算在 pollStore.pendingReminders()，那裡沒有 discord.js 相依所以測得到。
+ */
+export const buildReminderMessages = (poll, {userIds = [], hours = 0} = {}) => {
+    if(userIds.length === 0) return []
+
+    const header = `⏰ 「${clamp(poll.title, MAX_FIELD_NAME)}」再過約 ${hours} 小時就截止` +
+        `（${timestamp(poll.closeAt, 'R')}），以下的人還沒投票：`
+    const footer = `這次不參加的話，請到上面那則投票訊息按一下 ${OPT_OUT_EMOJI}，之後就不會再被提醒。`
+
+    //每一則都要先扣掉開頭與結尾的長度再算裝得下幾個提及。
+    //只有第一則有開頭、只有最後一則有結尾，但一律用最保守的算法 ——
+    //少裝幾個人只是多發一則，算錯而超過 2000 則是整則被 Discord 退回。
+    const room = MAX_MESSAGE - header.length - footer.length - 2
+
+    const chunks = []
+    let current = []
+    let length = 0
+
+    for(const userId of userIds){
+        const mention = `<@${userId}>`
+        if(current.length > 0 && length + mention.length + 1 > room){
+            chunks.push(current)
+            current = []
+            length = 0
+        }
+        current.push(mention)
+        length += mention.length + 1
+    }
+    if(current.length > 0) chunks.push(current)
+
+    return chunks.map((chunk, index) => [
+        index === 0 ? header : '',
+        chunk.join(' '),
+        index === chunks.length - 1 ? footer : '',
+    ].filter(Boolean).join('\n'))
 }
 
 /////////////////////////// 快速投票 ///////////////////////////

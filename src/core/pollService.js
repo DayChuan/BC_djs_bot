@@ -8,14 +8,19 @@ import {
     deletePoll,
     getEntries,
     getPoll,
+    hasReminded,
     listActivePolls,
+    markReminded,
+    pendingReminders,
     removeVoteEntry,
     resolveNoticeRole,
     threadParentId,
     updatePoll,
+    wantsRaid,
     wantsThread,
 } from '@/core/pollStore'
 import config from '@/config'
+import {OPT_OUT_EMOJI, REMIND_HOURS} from '@/config/polls'
 import {archivePoll} from '@/core/pollArchive'
 import {addDays, applyDates, basesOf, optionDateRange, refreshDatedOptions} from '@/core/pollTemplate'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
@@ -36,6 +41,7 @@ import {
     buildMemberPanel,
     buildQuickMessage,
     buildClosedMessage,
+    buildReminderMessages,
     buildPollMessage,
     buildResultMessage,
     canPeek,
@@ -46,6 +52,10 @@ import {LINEUP_IDENTITY_GROUP} from '@/config/lineup'
 //所以同一場投票不管經過幾次重啟或還原，都只會有一份排程、只會結算一次。
 const closeKey = (pollId) => `poll:close:${pollId}`
 const openKey = (pollId) => `poll:open:${pollId}`
+
+//截止前提醒，一個時間點一個 key。小時數帶在裡面，
+//所以 REMIND_HOURS 加一個時間點就自動多一組排程，不必再改 key 的規則。
+const remindJobKey = (hours, pollId) => `poll:remind${hours}:${pollId}`
 
 //快速投票與一般投票的訊息長得不一樣：前者公開即時顯示比數，
 //後者只放按鈕、內容藏在個人面板裡。
@@ -158,6 +168,24 @@ const sendPollMessage = async (client, poll) => {
     })
 
     scheduler.scheduleAt(closeKey(poll.id), new Date(poll.closeAt), () => closePoll(client, poll.id))
+
+    //❎ 與截止前提醒只在組隊模式下做(2026-09-04)。
+    //一般投票(臨時問大家吃什麼)被按上 ❎、又在截止前被 tag，是純粹的噪音。
+    //快速投票天然不會進來：它壽命只有幾分鐘，模板與 /poll 的 raid 都碰不到它。
+    if(wantsRaid(poll)){
+        //提醒排程要用 updated —— messageId 與(開串時)新的 channelId 都在那上面，
+        //提醒時要靠它們把訊息抓回來讀 ❎。
+        scheduleReminders(client, updated || poll)
+
+        //bot 自己先按一顆 ❎，否則沒有人知道有「這次不參與」這個機制，
+        //而且鎖定的討論串裡成員只點得動已經存在的表情。
+        //一定要 await 並接住：未 await 的 Promise 若 reject，外層 try/catch 攔不到，
+        //Node 會直接終止整個行程。按不上去只是少一個入口，不該讓發布失敗。
+        await message.react(OPT_OUT_EMOJI).catch((e) => {
+            logger.warn(`投票 ${poll.id} 按不上 ${OPT_OUT_EMOJI}(缺 AddReactions?)：`, e)
+        })
+    }
+
     logger.info(
         `投票已發布：${poll.id}「${poll.title}」channel=${channel.id} ` +
         `thread=${wantsThread(poll) ? 'yes' : 'no'} ` +
@@ -198,6 +226,138 @@ export const publishPending = async (client, pollId) => {
     })
 
     return sendPollMessage(client, ready)
+}
+
+/////////////////////////// 截止前提醒 ///////////////////////////
+
+const HOUR_MS = 60 * 60 * 1000
+
+const remindAt = (poll, hours) => new Date(new Date(poll.closeAt).getTime() - hours * HOUR_MS)
+
+//掛上截止前的提醒排程。發布、開機還原、編輯截止時間之後都要呼叫。
+//
+//兩種情況不掛：已經發過的、時間點已經過去的。
+//scheduleAt() 對過去的時間會「立刻執行」（結算就是靠這個補做），
+//少了這道判斷，重啟一次就會補送一則三小時前該發的提醒 —— 只會讓人困惑。
+const scheduleReminders = (client, poll, now = Date.now()) => {
+    if(!poll || !poll.closeAt) return 0
+
+    let scheduled = 0
+    for(const hours of REMIND_HOURS){
+        if(hasReminded(poll, hours)) continue
+
+        const at = remindAt(poll, hours)
+        if(!Number.isFinite(at.getTime()) || at.getTime() <= now) continue
+
+        scheduler.scheduleAt(remindJobKey(hours, poll.id), at, () => remindPoll(client, poll.id, hours))
+        scheduled += 1
+    }
+
+    return scheduled
+}
+
+//結算與取消時要一併收掉，否則排程會留到時間點才醒來，發現投票沒了才放棄。
+const cancelReminders = (pollId) => {
+    for(const hours of REMIND_HOURS) scheduler.cancel(remindJobKey(hours, pollId))
+}
+
+//讀出在投票訊息上按了 ❎ 的人。
+//
+//不監聽 messageReactionAdd：要用的時候才抓訊息、讀當下的表情清單，
+//沒有狀態要維護，也不會因為漏接事件而算錯（誰按了又取消也一律看當下）。
+//已經開著 Partials.Message/Reaction，快取裡的 reaction 可能是半截的，
+//讀 users 之前要先 fetch()。
+//
+//抓不到就當作沒有人按：名單可能多幾個人，但比整個提醒發不出去好。
+const fetchOptedOut = async (message) => {
+    const reaction = message.reactions.cache.get(OPT_OUT_EMOJI)
+    if(!reaction) return []
+
+    try{
+        const full = reaction.partial ? await reaction.fetch() : reaction
+        const users = await full.users.fetch()
+        return [...users.keys()]
+    }
+    catch(e){
+        logger.warn(`讀取 ${OPT_OUT_EMOJI} 的使用者清單失敗，這次不扣除任何人：`, e)
+        return []
+    }
+}
+
+//通知身分組的成員 id。沒設定對照表就回空陣列 —— 沒有對象等於不用提醒。
+//
+//一次 fetch 整個伺服器再過濾，不用 role.members：後者只看得到快取裡的成員，
+//剛重啟時會少一大半人，而且少了誰完全看不出來。
+const fetchNoticeMemberIds = async (guild, guildId) => {
+    const roleId = resolveNoticeRole(config.noticeRoles && config.noticeRoles.poll, guildId)
+    if(!guild || !roleId) return []
+
+    try{
+        const members = await guild.members.fetch()
+        return [...members.values()]
+            .filter((member) => !member.user.bot && member.roles.cache.has(roleId))
+            .map((member) => member.id)
+    }
+    catch(e){
+        logger.warn(`取得通知身分組 ${roleId} 的成員失敗，這次不提醒：`, e)
+        return []
+    }
+}
+
+//發一次截止前提醒。由排程呼叫。
+//
+//對象＝通知身分組的成員，扣掉已經投票的、扣掉按了 ❎ 的、扣掉機器人。
+//扣完沒有人就完全不發訊息 —— 發一則「大家都投完了」也是洗版。
+export const remindPoll = async (client, pollId, hours) => {
+    const poll = await getPoll(pollId)
+    if(!poll || poll.status !== 'open') return 0
+
+    //重啟還原與手動觸發都可能重複進來，這是最後一道：發過就不再發
+    if(hasReminded(poll, hours)) return 0
+
+    const channel = await fetchChannel(client, poll.channelId)
+    if(!channel){
+        logger.warn(`投票 ${pollId} 的 ${hours} 小時提醒找不到頻道 ${poll.channelId}，略過`)
+        return 0
+    }
+
+    let optedOutIds = []
+    if(poll.messageId){
+        try{
+            optedOutIds = await fetchOptedOut(await channel.messages.fetch(poll.messageId))
+        }
+        catch(e){
+            logger.warn(`投票 ${pollId} 的原訊息抓不到，${OPT_OUT_EMOJI} 這次不扣除：`, e)
+        }
+    }
+
+    const botId = client.user ? client.user.id : null
+    const userIds = pendingReminders({
+        memberIds: await fetchNoticeMemberIds(channel.guild, poll.guildId),
+        poll,
+        optedOutIds,
+        //bot 自己按的那顆 ❎ 會出現在清單裡，濾掉才不會把自己算進去
+        botIds: botId ? [botId] : [],
+    })
+
+    //先記下「這個時間點處理過」再發訊息。反過來的話，發到一半當機
+    //會在下次重啟時整串重發一次 —— 重複洗版比漏發一次嚴重。
+    await markReminded(pollId, hours)
+
+    if(userIds.length === 0){
+        logger.info(`投票 ${pollId} 的 ${hours} 小時提醒：沒有人需要提醒，不發訊息`)
+        return 0
+    }
+
+    //allowedMentions 用 parse: ['users']：只放行訊息裡出現的個人提及，
+    //不會連帶把身分組或 @everyone 一起送出去。
+    //不列舉 users 清單是因為那個欄位上限 100 人，超過就整則被退回。
+    for(const content of buildReminderMessages(poll, {userIds, hours})){
+        await channel.send({content, allowedMentions: {parse: ['users']}})
+    }
+
+    logger.info(`投票 ${pollId}「${poll.title}」已發出 ${hours} 小時提醒：${userIds.length} 人`)
+    return userIds.length
 }
 
 /////////////////////////////// 結算 ///////////////////////////////
@@ -297,6 +457,11 @@ const fetchDisplayNames = async (guild, userIds) => {
 //整段包起來且一定 await：名單只是附加資訊，貼不出來不該讓結算(排下一輪、歸檔)跟著停住，
 //而未 await 的 Promise 若 reject，外層的 try/catch 攔不到，整個行程會被 Node 終止。
 const sendLineup = async (channel, poll) => {
+    //改用明確的 raid 開關，不再從身分群組推斷(2026-09-04)。
+    //身分群組管的是「顯示哪個職業選單」，跟「要不要編隊」是兩件事。
+    //但名單的編隊規則寫死楓之谷的六個職業，所以身分群組仍然要對得上，
+    //否則會拿 TRPG 的角色去湊箭神與聖騎士。
+    if(!wantsRaid(poll)) return
     if(poll.identityGroup !== LINEUP_IDENTITY_GROUP) return
 
     try{
@@ -370,6 +535,7 @@ export const closePoll = async (client, pollId) => {
     //「結算後清空」的語意是「移出進行中」，不是銷毀 —— 之後可用 /poll_admin 查。
     await archivePoll(poll)
     scheduler.cancel(closeKey(pollId))
+    cancelReminders(pollId)
 
     logger.info(`投票已結算：${pollId}「${poll.title}」投票人數=${Object.keys(poll.votes || {}).length}`)
     return poll
@@ -411,6 +577,10 @@ export const restorePolls = async (client) => {
             if(poll.status === 'open'){
                 //已經過期的(停機期間錯過的截止時間)會立刻執行，補結算
                 scheduler.scheduleAt(closeKey(poll.id), new Date(poll.closeAt), () => closePoll(client, poll.id))
+
+                //提醒相反：已經發過的、時間點已經過去的都不補
+                //(見 scheduleReminders)。截止可以晚一點做，提醒晚了只是噪音。
+                scheduleReminders(client, poll)
             }
             else{
                 scheduler.scheduleAt(openKey(poll.id), new Date(poll.openAt), () => publishPending(client, poll.id))
@@ -572,6 +742,7 @@ export const cancelPoll = async (client, pollId, by = null) => {
 
     scheduler.cancel(closeKey(pollId))
     scheduler.cancel(openKey(pollId))
+    cancelReminders(pollId)
 
     await archivePoll(poll, {reason: 'cancelled', by})
     logger.info(`投票已取消：${pollId}「${poll.title}」by=${by}`)
@@ -587,6 +758,11 @@ export const applyPollEdit = async (client, pollId, patch) => {
 
     if(poll.status === 'open'){
         scheduler.scheduleAt(closeKey(poll.id), new Date(poll.closeAt), () => closePoll(client, poll.id))
+
+        //截止時間可能被改掉了，提醒的時間點跟著算。
+        //改成更晚才截止時，已經發過的那次不會再發一遍(hasReminded 擋著)。
+        cancelReminders(poll.id)
+        scheduleReminders(client, poll)
 
         if(poll.messageId){
             const channel = await fetchChannel(client, poll.channelId)
@@ -747,6 +923,7 @@ export default {
     createAndPublish,
     publishPending,
     closePoll,
+    remindPoll,
     restorePolls,
     handlePollAction,
     peekPoll,

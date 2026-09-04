@@ -326,6 +326,7 @@ export const parseTemplateFields = (fields, existing = null) => {
             //跟 multi 一樣是切換按鈕改的，Modal 裡沒有這一格 ——
             //所以一定要從 base 帶過來，否則編輯一次模板就把開關洗掉了。
             thread: Boolean(base.thread),
+            raid: Boolean(base.raid),
             weekly,
         },
     }

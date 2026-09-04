@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import logger from '@/core/logger'
-import {ARCHIVE_RETENTION_DAYS, HISTORY_PAGE_SIZE} from '@/config/polls'
+import {ARCHIVE_RETENTION_DAYS, HISTORY_PAGE_SIZE, THREAD_RETENTION_DAYS} from '@/config/polls'
 import {dataDir, deletePoll, isValidPollId, readJson, tally, writeJson} from '@/core/pollStore'
 
 //已結算的投票放這裡，按年月分子資料夾。
@@ -157,6 +157,85 @@ export const purgeExpired = async (days = ARCHIVE_RETENTION_DAYS, now = Date.now
     return removed
 }
 
+/////////////////////////// 討論串清理 ///////////////////////////
+
+//這一場的討論串是不是該刪了。**第一道防護**就在這裡：
+//只認歸檔紀錄上 thread === true 的場次。
+//
+//判定用「結算後滿幾天」而不是「最後活動時間」：討論串是鎖定的，沒有人能發言，
+//最後活動時間永遠停在 bot 貼結果那一刻，拿它當條件等於沒有條件。
+export const isThreadExpired = (record, days = THREAD_RETENTION_DAYS, now = Date.now()) => {
+    //=== true 而不是 truthy：舊紀錄沒有這個欄位就是 undefined，一律不碰
+    if(!record || record.thread !== true) return false
+
+    const stamp = new Date(record.closeAt || record.archivedAt || 0).getTime()
+    //時間讀不出來的不碰。這裡誤判的代價是刪掉一個頻道，寧可讓討論串多留著
+    if(!Number.isFinite(stamp) || stamp === 0) return false
+
+    return stamp < now - days * DAY_MS
+}
+
+/**
+ * 刪掉一場投票的討論串。
+ *
+ * ⚠️ **這是整個專案最危險的一段。**沒開討論串的投票，它的 channelId 是
+ * **正式的文字頻道**，而 Discord 刪掉頻道**救不回來**。
+ *
+ * 所以有兩道防護，兩道都不能拿掉：
+ *   1. 歸檔紀錄上 thread === true（在 isThreadExpired 裡）
+ *   2. 真的把頻道抓回來之後，再問一次 channel.isThread()
+ *
+ * 第 2 道才是真正擋住災難的那一道：開串失敗而退回母頻道的場次，紀錄上
+ * thread 仍然是 true，但 channelId 已經是母頻道 —— 只有 isThread() 分得出來。
+ *
+ * 失敗一律吞掉只記 log：權限不足、或早就被人手動刪掉都是正常情況，
+ * 不該讓開機流程中斷（同 timerService 刪訊息的寫法）。
+ */
+const deletePollThread = async (client, record) => {
+    const channelId = record.channelId
+    if(!client || !channelId) return false
+
+    const channel = await client.channels.fetch(channelId).catch(() => null)
+    //抓不到多半是早就被手動刪掉了，那就是已經達成目的，不用吵
+    if(!channel) return false
+
+    //第二道防護。少了這一行就是把正式頻道刪掉。
+    if(typeof channel.isThread !== 'function' || !channel.isThread()){
+        logger.warn(
+            `投票 ${record.id} 的頻道 ${channelId} 不是討論串，不刪除 ` +
+            `（紀錄上 thread=true，可能是當初建串失敗退回母頻道）`
+        )
+        return false
+    }
+
+    try{
+        await channel.delete(`投票討論串保留期滿：${record.id}`)
+        logger.info(`已刪除投票 ${record.id}「${record.title}」的討論串 ${channelId}`)
+        return true
+    }
+    catch(e){
+        logger.warn(`刪除投票 ${record.id} 的討論串 ${channelId} 失敗(略過)：`, e)
+        return false
+    }
+}
+
+//掃過歸檔，把過期的投票討論串刪掉。開機時跑一次，跟 purgeExpired() 一起。
+//歸檔紀錄本身不動 —— 那是 purgeExpired() 的事，兩者的保留期限不一樣。
+export const purgeThreads = async (client, days = THREAD_RETENTION_DAYS, now = Date.now()) => {
+    let removed = 0
+
+    for(const month of await listMonths()){
+        for(const name of await listFiles(month)){
+            const record = await readJson(path.join(monthDir(month), name))
+            if(!isThreadExpired(record, days, now)) continue
+            if(await deletePollThread(client, record)) removed += 1
+        }
+    }
+
+    if(removed > 0) logger.info(`已刪除 ${removed} 個結算滿 ${days} 天的投票討論串`)
+    return removed
+}
+
 export default {
     archiveDir,
     archivePoll,
@@ -164,4 +243,6 @@ export default {
     getArchived,
     listArchived,
     purgeExpired,
+    isThreadExpired,
+    purgeThreads,
 }

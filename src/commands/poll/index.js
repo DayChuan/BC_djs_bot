@@ -81,6 +81,9 @@ command
     .addBooleanOption((option) => option
         .setName('thread')
         .setDescription('是否開在鎖定的討論串裡，避免被聊天洗掉（按鈕與面板不受鎖定影響）'))
+    .addBooleanOption((option) => option
+        .setName('raid')
+        .setDescription('組隊模式：結算後出隊伍名單、可按 ❎ 表示不參與、截止前提醒沒投的人'))
     .addIntegerOption((option) => option
         .setName('hours')
         .setDescription(`幾小時後截止（預設 ${DEFAULT_HOURS} 小時，每週重複時此項無效）`)
@@ -214,6 +217,7 @@ export const action = async(ctx) => {
     const multiChar = Boolean(fromTemplate(ctx.options.getBoolean('multi_char'), 'multiChar', false))
     const peek = Boolean(fromTemplate(ctx.options.getBoolean('peek'), 'peek', true))
     const thread = Boolean(fromTemplate(ctx.options.getBoolean('thread'), 'thread', false))
+    const raid = Boolean(fromTemplate(ctx.options.getBoolean('raid'), 'raid', false))
 
     //建串要用的是「頻道」，不是討論串 —— 討論串裡不能再開討論串。
     //有人會在討論串裡下 /poll，此時取它的母頻道，否則每一場都會退回而開不了串。
@@ -251,6 +255,7 @@ export const action = async(ctx) => {
         multiChar,
         peek,
         thread,
+        raid,
         //每週續辦時 channelId 已經是上一輪的討論串，所以母頻道要另外存
         parentChannelId,
         weekly: weeklyConfig,
@@ -268,7 +273,7 @@ export const action = async(ctx) => {
     logger.info(
         `建立投票：${poll.id}「${poll.title}」by=${ctx.user.tag} 選項數=${options.length} ` +
         `模板=${template ? template.name : '無'} 起日=${dateStart || '無'} ` +
-        `討論串=${thread ? '開' : '關'}`
+        `討論串=${thread ? '開' : '關'} 組隊=${raid ? '開' : '關'}`
     )
 
     const lines = [`投票已發出，共 ${options.length} 個選項。`]
@@ -293,6 +298,12 @@ export const action = async(ctx) => {
         lines.push(poll.channelId === parentChannelId
             ? '⚠️ 討論串建立失敗（我可能缺「建立公開討論串」權限），投票已直接發在本頻道。'
             : `投票開在討論串 <#${poll.channelId}> 裡：一般成員在裡面不能發言，但投票與面板都正常。`)
+    }
+    if(raid){
+        lines.push(
+            '已開啟組隊模式：結算後會自動貼出前兩高票日期的隊伍名單，' +
+            '訊息上的 ❎ 可以按著表示這次不參與（截止前的提醒就不會 tag 你）。'
+        )
     }
     lines.push(peek
         ? '所有人都可以按投票訊息上的按鈕查看目前結果（只有自己看得到）。'

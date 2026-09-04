@@ -99,6 +99,17 @@ export const resolveNoticeRole = (table, guildId) => {
 //在這裡就把 undefined 收斂成布林，呼叫端才不必到處防 undefined。
 export const wantsThread = (poll) => Boolean(poll && poll.thread)
 
+//組隊模式：結算後出隊伍名單、bot 按 ❎、截止前提醒沒投票的人。
+//三件事綁在同一個開關，因為它們是同一個使用情境(固定團的每週揪團)。
+//
+//舊的投票紀錄沒有這個欄位 = 關閉，所以一般投票(臨時問大家吃什麼)
+//不會被按 ❎、也不會 tag 人。
+//
+//刻意不用「身分群組是不是楓之谷」來推斷：身分群組管的是「顯示哪個職業選單」，
+//跟「要不要編隊」是兩件事。綁在一起的話，想開一場楓之谷投票但不要名單、
+//或想讓別的群組也編隊，都表達不出來。
+export const wantsRaid = (poll) => Boolean(poll && poll.raid)
+
 //建串一律用母頻道。每週續辦時 poll.channelId 已經是「上一輪的討論串」，
 //拿它去建串會失敗 —— 討論串裡不能再開討論串。
 export const threadParentId = (poll) => (poll && poll.parentChannelId) || null
@@ -243,6 +254,56 @@ export const tally = (poll) => {
     }
 
     return {voterCount, entryCount, options, identityTotals}
+}
+
+/////////////////////////// 截止前提醒 ///////////////////////////
+
+//已經發過哪幾次提醒記在 poll.reminded，一個時間點一個布林：{h12: true, h3: false}。
+//key 由小時數組出來，所以 config 的 REMIND_HOURS 增減時間點不必動資料結構。
+export const remindKey = (hours) => `h${hours}`
+
+//舊資料沒有 reminded 欄位就當成「一次都還沒發過」。
+//在這裡就把 undefined 收斂成布林，呼叫端不必到處防（同 wantsThread）。
+export const hasReminded = (poll, hours) =>
+    Boolean(poll && poll.reminded && poll.reminded[remindKey(hours)] === true)
+
+//已經投過票的人。只有「至少選了一個選項」才算 ——
+//按了新增角色卻什麼都沒選的空白登記等於還沒表態，tally() 也是這樣算的，
+//兩邊要一致，否則會出現「報表上沒有他、卻也不提醒他」的黑洞。
+export const votedUserIds = (poll) => {
+    const ids = new Set()
+
+    for(const [userId, raw] of Object.entries((poll && poll.votes) || {})){
+        for(const entry of normalizeEntries(raw)){
+            if(entry.options.length === 0) continue
+            ids.add(userId)
+            break
+        }
+    }
+
+    return ids
+}
+
+//待提醒名單：身分組成員 − 已投票 − 按了 ❎ − 機器人。
+//
+//維持 memberIds 原本的順序，訊息裡的排列才不會每次都跳動。
+//同一個人既投票又按 ❎ 時只是被濾掉一次，不會重複出現、也不會變成負數 ——
+//這是集合減法而不是計數相減，那種錯誤在這裡結構上就不可能發生。
+export const pendingReminders = ({
+    memberIds = [],
+    poll = {},
+    optedOutIds = [],
+    botIds = [],
+} = {}) => {
+    const voted = votedUserIds(poll)
+    const excluded = new Set([...optedOutIds, ...botIds].map(String))
+    const seen = new Set()
+
+    return memberIds.map(String).filter((id) => {
+        if(seen.has(id)) return false
+        seen.add(id)
+        return !voted.has(id) && !excluded.has(id)
+    })
 }
 
 /////////////////////////// 檔案讀寫的共用工具 ///////////////////////////
@@ -407,6 +468,14 @@ export const removeVoteEntry = (id, userId, entryId) => updatePoll(id, (poll) =>
     removeEntry(poll, userId, entryId)
 })
 
+//記下某個時間點的提醒已經處理過。重啟後靠這個欄位判斷不要重發。
+//已經結算的就不寫 —— 那筆檔案馬上要被歸檔搬走，寫進去只是白費一次 I/O。
+export const markReminded = (id, hours) => updatePoll(id, (poll) => {
+    if(poll.status !== 'open') return false
+    if(!poll.reminded) poll.reminded = {}
+    poll.reminded[remindKey(hours)] = true
+})
+
 /////////////////////////// 舊格式遷移 ///////////////////////////
 
 //舊版把所有投票放在單一個 data/polls.json。開機時偵測到就拆成一場一檔，
@@ -454,6 +523,11 @@ export default {
     updatePoll,
     deletePoll,
     castVote,
+    markReminded,
+    remindKey,
+    hasReminded,
+    votedUserIds,
+    pendingReminders,
     tally,
     applyVote,
     parseOptionsInput,
@@ -464,6 +538,7 @@ export default {
     buildThreadName,
     resolveNoticeRole,
     wantsThread,
+    wantsRaid,
     threadParentId,
     migrateLegacyStore,
     resetCache,
