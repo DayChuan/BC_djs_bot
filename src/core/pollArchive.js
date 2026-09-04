@@ -172,7 +172,9 @@ export const isThreadExpired = (record, days = THREAD_RETENTION_DAYS, now = Date
     //時間讀不出來的不碰。這裡誤判的代價是刪掉一個頻道，寧可讓討論串多留著
     if(!Number.isFinite(stamp) || stamp === 0) return false
 
-    return stamp < now - days * DAY_MS
+    //「滿 N 天」＝ 已經過了 N 天，所以是 <=。
+    //用 < 的話剛好整整 30 天的那一筆會被判成還沒到期，要多等一天才刪。
+    return stamp <= now - days * DAY_MS
 }
 
 /**
