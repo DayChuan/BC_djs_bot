@@ -162,7 +162,7 @@ export const purgeExpired = async (days = ARCHIVE_RETENTION_DAYS, now = Date.now
 //這一場的討論串是不是該刪了。**第一道防護**就在這裡：
 //只認歸檔紀錄上 thread === true 的場次。
 //
-//判定用「結算後滿幾天」而不是「最後活動時間」：討論串是鎖定的，沒有人能發言，
+//判定用「結算後滿幾天」而不是「最後活動時間」：討論串結算後就沒人會再去動，
 //最後活動時間永遠停在 bot 貼結果那一刻，拿它當條件等於沒有條件。
 export const isThreadExpired = (record, days = THREAD_RETENTION_DAYS, now = Date.now()) => {
     //=== true 而不是 truthy：舊紀錄沒有這個欄位就是 undefined，一律不碰

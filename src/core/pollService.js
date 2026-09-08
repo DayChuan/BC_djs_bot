@@ -20,7 +20,7 @@ import {
     wantsThread,
 } from '@/core/pollStore'
 import config from '@/config'
-import {OPT_OUT_EMOJI, REMIND_HOURS} from '@/config/polls'
+import {OPT_OUT_EMOJI, REMIND_HOURS, THREAD_SLOWMODE_SECONDS} from '@/config/polls'
 import {archivePoll} from '@/core/pollArchive'
 import {addDays, applyDates, basesOf, optionDateRange, refreshDatedOptions} from '@/core/pollTemplate'
 import {clearDraft, getDraft, setDraft} from '@/core/pollDraft'
@@ -71,12 +71,12 @@ const fetchChannel = async (client, channelId) => {
 
 /////////////////////////////// 發布 ///////////////////////////////
 
-//為一場投票開一個鎖定的討論串，回傳「訊息要發到哪裡」。
+//為一場投票開一個討論串，回傳「訊息要發到哪裡」。
 //
 //母頻道一律取 parentChannelId：每週續辦時 poll.channelId 已經是上一輪的
 //討論串，拿它建串必定失敗(討論串裡不能再開討論串)。
 //
-//建串或鎖定失敗時退回母頻道，不讓整場投票發不出來 ——
+//建串失敗時退回母頻道，不讓整場投票發不出來 ——
 //投票本身比「發在討論串」重要得多，鎖不起來也只是會被聊天洗。
 const openPollThread = async (client, poll) => {
     let parentId = threadParentId(poll)
@@ -107,11 +107,26 @@ const openPollThread = async (client, poll) => {
             reason: `投票 ${poll.id}`,
         })
 
-        //鎖定只擋發訊息，不擋按鈕與面板互動，所以投票流程完全不受影響。
-        //鎖失敗不回頭 —— 討論串已經開好了，退回母頻道反而更亂。
-        await thread.setLocked(true).catch((e) => {
-            logger.warn(`投票 ${poll.id} 的討論串鎖定失敗(缺 ManageThreads?)，維持未鎖定：`, e)
-        })
+        //2026-09-08：**不再鎖定討論串**。
+        //實測(一般成員帳號)：鎖定會讓訊息元件整個變灰按不下去，投票直接不能用。
+        //而且 bot 端完全看不到錯誤 —— 互動根本沒送出來，log 上一片乾淨。
+        //
+        //原本以為「鎖定只擋發訊息、不擋元件」，那是錯的：唯讀頻道裡的按鈕面板
+        //(例如 /role-panel)能用，是因為那是頻道權限；討論串的 locked 是另一回事，
+        //它會直接停用元件。
+        //
+        //也沒有別的路可以走：**討論串沒有自己的權限覆寫**(discord.js 的
+        //ThreadChannel 只有 permissionsFor() 可查詢，沒有 permissionOverwrites 可設定)，
+        //一律繼承母頻道。改母頻道的話同一個頻道底下所有討論串都會被禁言，
+        //使用者的頻道有很多其他用途的討論串，不能這樣做。
+        //
+        //剩下唯一「一串一設」又不會停用按鈕的工具是慢速模式，預設關閉：
+        //要用的話把 config/polls.js 的 THREAD_SLOWMODE_SECONDS 調成秒數(上限 21600 = 6 小時)。
+        if(THREAD_SLOWMODE_SECONDS > 0){
+            await thread.setRateLimitPerUser(THREAD_SLOWMODE_SECONDS, `投票 ${poll.id}`).catch((e) => {
+                logger.warn(`投票 ${poll.id} 的討論串設定慢速模式失敗(缺 ManageThreads?)：`, e)
+            })
+        }
 
         return thread
     }
@@ -179,7 +194,7 @@ const sendPollMessage = async (client, poll) => {
         scheduleReminders(client, updated || poll)
 
         //bot 自己先按一顆 ❎，否則沒有人知道有「這次不參與」這個機制，
-        //而且鎖定的討論串裡成員只點得動已經存在的表情。
+        //而且成員通常只會去點已經存在的表情，不會自己找 ❎ 加上去。
         //一定要 await 並接住：未 await 的 Promise 若 reject，外層 try/catch 攔不到，
         //Node 會直接終止整個行程。按不上去只是少一個入口，不該讓發布失敗。
         await message.react(OPT_OUT_EMOJI).catch((e) => {

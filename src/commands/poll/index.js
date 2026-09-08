@@ -80,7 +80,7 @@ command
         .setDescription('是否開放所有人中途查看結果（預設是；設否則只有管理員能用 /poll_admin）'))
     .addBooleanOption((option) => option
         .setName('thread')
-        .setDescription('是否開在鎖定的討論串裡，避免被聊天洗掉（按鈕與面板不受鎖定影響）'))
+        .setDescription('是否開一個專屬討論串來放這場投票，避免被頻道的聊天洗掉'))
     .addBooleanOption((option) => option
         .setName('raid')
         .setDescription('組隊模式：結算後出隊伍名單、可按 ❎ 表示不參與、截止前提醒沒投的人'))
@@ -297,7 +297,7 @@ export const action = async(ctx) => {
     if(thread){
         lines.push(poll.channelId === parentChannelId
             ? '⚠️ 討論串建立失敗（我可能缺「建立公開討論串」權限），投票已直接發在本頻道。'
-            : `投票開在討論串 <#${poll.channelId}> 裡：一般成員在裡面不能發言，但投票與面板都正常。`)
+            : `投票開在討論串 <#${poll.channelId}> 裡，不會被頻道的聊天洗掉。`)
     }
     if(raid){
         lines.push(
