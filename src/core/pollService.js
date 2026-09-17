@@ -16,6 +16,7 @@ import {
     resolveNoticeRole,
     threadParentId,
     updatePoll,
+    carryToNextRound,
     wantsRaid,
     wantsThread,
 } from '@/core/pollStore'
@@ -390,11 +391,11 @@ export const remindPoll = async (client, pollId, hours) => {
 const scheduleNextRound = async (client, poll) => {
     const openAt = nextWeeklyDate(poll.weekly.openDay, poll.weekly.openTime).toISOString()
 
-    //整份複製，只覆寫「這一輪專屬」的欄位。
-    //早期版本用白名單逐一列舉要帶過去的設定，結果 multiChar 與 peek 都漏了 ——
-    //開了一人多角色的每週投票，下一週會變回單角色，而且不公開中途結果的設定
-    //也會被還原成公開。白名單只要新增欄位就會漏，所以改成反過來做。
-    const {id, messageId, closeAt, archivedAt, archivedBy, result, ...carried} = poll
+    //整份複製，只拿掉「這一輪專屬」的欄位(清單見 pollStore.PER_ROUND_FIELDS)。
+    //早期版本用白名單逐一列舉要帶過去的設定，結果 multiChar 與 peek 都漏了。
+    //清單獨立成常數是因為黑名單忘記新增一樣會漏 —— 2026-09-17 的 reminded 就是，
+    //下一輪一開始就是「兩次都發過了」，整輪不發提醒而且 log 看不出來。
+    const carried = carryToNextRound(poll)
 
     //有標日期的投票，下一輪整組往後推一週：起日 +7 天，選項的日期跟著重算。
     //重算的依據是 option.base(沒有日期的原始文字)，不是 label ——

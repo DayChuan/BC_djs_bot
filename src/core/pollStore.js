@@ -476,6 +476,30 @@ export const markReminded = (id, hours) => updatePoll(id, (poll) => {
     poll.reminded[remindKey(hours)] = true
 })
 
+//每週續辦時**不可以**帶到下一輪的欄位。除此之外一律整份複製 ——
+//早期用白名單列舉「要帶過去的」，結果 multiChar 與 peek 都漏了。
+//
+//2026-09-17 新增 reminded：它沒被排除，導致下一輪一開始就是
+//{h12:true, h3:true}，整輪都不會發提醒，而且 log 上完全看不出來。
+//這正是上面那句「白名單只要新增欄位就會漏」的反面 —— 黑名單只要**忘記新增**就會漏，
+//所以把它獨立成常數並寫測試釘住。
+export const PER_ROUND_FIELDS = Object.freeze([
+    'id',           //新的一輪是新的 id
+    'messageId',    //還沒發，沒有訊息
+    'closeAt',      //發出去當下才算
+    'reminded',     //提醒的「已發過」紀錄，每一輪重新算
+    'archivedAt',
+    'archivedBy',
+    'result',       //上一輪的結果快照
+])
+
+//取出「可以帶到下一輪」的設定。votes / status / openAt 由呼叫端自己覆寫。
+export const carryToNextRound = (poll) => {
+    const carried = {...(poll || {})}
+    for(const key of PER_ROUND_FIELDS) delete carried[key]
+    return carried
+}
+
 /////////////////////////// 舊格式遷移 ///////////////////////////
 
 //舊版把所有投票放在單一個 data/polls.json。開機時偵測到就拆成一場一檔，
@@ -524,6 +548,8 @@ export default {
     deletePoll,
     castVote,
     markReminded,
+    PER_ROUND_FIELDS,
+    carryToNextRound,
     remindKey,
     hasReminded,
     votedUserIds,

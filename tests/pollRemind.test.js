@@ -188,3 +188,63 @@ describe('hasReminded / markReminded', () => {
         expect((await store.getPoll(poll.id)).reminded).toBeUndefined()
     })
 })
+
+describe('carryToNextRound', () => {
+    //2026-09-17 的實際故障：每週續辦是整份複製，reminded 沒被排除，
+    //下一輪一開始就是 {h12:true, h3:true}，整輪都不會發提醒，
+    //而且 log 上完全看不出來 —— 沒有錯誤，只是「什麼都沒發生」。
+    it('reminded 不會帶到下一輪', () => {
+        const carried = store.carryToNextRound({
+            id: 'p_old',
+            title: '龍王投票',
+            reminded: {h12: true, h3: true},
+        })
+
+        expect(carried.reminded).toBeUndefined()
+    })
+
+    it('這一輪專屬的欄位全部不帶', () => {
+        const carried = store.carryToNextRound({
+            id: 'p_old',
+            messageId: 'm1',
+            closeAt: '2026-09-17T13:00:00.000Z',
+            reminded: {h12: true},
+            archivedAt: '2026-09-17T13:00:01.000Z',
+            archivedBy: 'u1',
+            result: {options: []},
+        })
+
+        expect(Object.keys(carried)).toEqual([])
+    })
+
+    it('設定類的欄位一定要帶過去', () => {
+        //白名單版本漏掉 multiChar 與 peek 的事故，換成黑名單之後不該重演
+        const carried = store.carryToNextRound({
+            id: 'p_old',
+            title: '龍王投票',
+            options: [{key: 'o0', label: '一', base: '一'}],
+            multi: true,
+            multiChar: true,
+            peek: false,
+            thread: true,
+            raid: true,
+            identityGroup: 'maplestory',
+            parentChannelId: 'c1',
+            dateStart: '2026-09-15',
+            weekly: {openDay: 1, openTime: '09:00', closeDay: 4, closeTime: '21:00'},
+        })
+
+        expect(carried).toMatchObject({
+            title: '龍王投票',
+            multi: true,
+            multiChar: true,
+            peek: false,
+            thread: true,
+            raid: true,
+            identityGroup: 'maplestory',
+            parentChannelId: 'c1',
+            dateStart: '2026-09-15',
+        })
+        expect(carried.weekly.closeTime).toBe('21:00')
+    })
+})
