@@ -16,6 +16,7 @@ import {
     resolveNoticeRole,
     threadParentId,
     updatePoll,
+    votedUserIds,
     carryToNextRound,
     wantsRaid,
     wantsThread,
@@ -292,12 +293,23 @@ const cancelReminders = (pollId) => {
 //讀 users 之前要先 fetch()。
 //
 //抓不到就當作沒有人按：名單可能多幾個人，但比整個提醒發不出去好。
+//
+//2026-09-18 修：原本找不到表情就靜默 return []，結果按過 ❎ 的人照樣被 tag，
+//而 log 上一個字都沒有 —— 完全查不出是哪一層出問題。
+//現在找不到就記 warn：bot 發布時一定會自己按一顆，所以「找不到」本身就是異常。
 const fetchOptedOut = async (message) => {
     const reaction = message.reactions.cache.get(OPT_OUT_EMOJI)
-    if(!reaction) return []
+    if(!reaction){
+        logger.warn(
+            `投票訊息 ${message.id} 上找不到 ${OPT_OUT_EMOJI}(bot 發布時應該會自己按一顆)，` +
+            '這次不扣除任何人'
+        )
+        return []
+    }
 
     try{
         const full = reaction.partial ? await reaction.fetch() : reaction
+        //users.fetch() 預設只回 100 筆，足夠這個規模；真的超過再分頁。
         const users = await full.users.fetch()
         return [...users.keys()]
     }
@@ -347,7 +359,13 @@ export const remindPoll = async (client, pollId, hours) => {
     let optedOutIds = []
     if(poll.messageId){
         try{
-            optedOutIds = await fetchOptedOut(await channel.messages.fetch(poll.messageId))
+            //force: true 是關鍵。不加的話 messages.fetch() 會先吃快取，
+            //而這則訊息是 bot 自己發的、一定在快取裡 —— 拿到的 reactions
+            //只有 bot 在線期間收到的那些，別人按的 ❎ 不一定在裡面。
+            //2026-09-18 按過 ❎ 的人照樣被 tag，就是這個原因。
+            optedOutIds = await fetchOptedOut(
+                await channel.messages.fetch({message: poll.messageId, force: true})
+            )
         }
         catch(e){
             logger.warn(`投票 ${pollId} 的原訊息抓不到，${OPT_OUT_EMOJI} 這次不扣除：`, e)
@@ -355,13 +373,22 @@ export const remindPoll = async (client, pollId, hours) => {
     }
 
     const botId = client.user ? client.user.id : null
+    const noticeIds = await fetchNoticeMemberIds(channel.guild, poll.guildId)
     const userIds = pendingReminders({
-        memberIds: await fetchNoticeMemberIds(channel.guild, poll.guildId),
+        memberIds: noticeIds,
         poll,
         optedOutIds,
         //bot 自己按的那顆 ❎ 會出現在清單裡，濾掉才不會把自己算進去
         botIds: botId ? [botId] : [],
     })
+
+    //把四個數字都記下來。少了這行，「為什麼某人被 tag」只能靠猜 ——
+    //2026-09-18 查那次誤 tag 就是卡在沒有任何中間數據。
+    logger.info(
+        `投票 ${pollId} 的 ${hours} 小時提醒名單：通知身分組 ${noticeIds.length} 人、` +
+        `已投票 ${votedUserIds(poll).size} 人、按 ${OPT_OUT_EMOJI} ${optedOutIds.length} 人` +
+        `(含 bot) → 待提醒 ${userIds.length} 人`
+    )
 
     //先記下「這個時間點處理過」再發訊息。反過來的話，發到一半當機
     //會在下次重啟時整串重發一次 —— 重複洗版比漏發一次嚴重。
