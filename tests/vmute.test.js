@@ -225,3 +225,65 @@ describe('handleVoiceJoin', () => {
         expect(member.voice.setMute).not.toHaveBeenCalled()
     })
 })
+
+describe('checkMuteRequest', () => {
+    //這份判斷被 /vmute 與右鍵選單「靜音 60 秒」共用，所以邊界只寫一次、也只測一次。
+    const target = (over = {}) => ({
+        id: 'u2',
+        user: {bot: false, tag: 'A#1'},
+        voice: {channelId: 'c1'},
+        ...over,
+    })
+    const base = {seconds: 60, actorChannelId: 'c1', target: target(), guildOwnerId: 'owner'}
+
+    it('同一個語音頻道、秒數合法 → 放行', () => {
+        expect(vmute.checkMuteRequest(base).ok).toBe(true)
+    })
+
+    it('秒數不在允許清單裡 → 擋下', () => {
+        expect(vmute.checkMuteRequest({...base, seconds: 45}).ok).toBe(false)
+        expect(vmute.checkMuteRequest({...base, seconds: null}).ok).toBe(false)
+    })
+
+    it('自己不在語音頻道 → 擋下', () => {
+        expect(vmute.checkMuteRequest({...base, actorChannelId: null}).ok).toBe(false)
+    })
+
+    it('對方不在同一個語音頻道 → 擋下', () => {
+        expect(vmute.checkMuteRequest({...base, target: target({voice: {channelId: 'c9'}})}).ok).toBe(false)
+        expect(vmute.checkMuteRequest({...base, target: target({voice: null})}).ok).toBe(false)
+    })
+
+    it('對象是 bot 或伺服器擁有者 → 擋下', () => {
+        expect(vmute.checkMuteRequest({...base, target: target({user: {bot: true}})}).ok).toBe(false)
+        expect(vmute.checkMuteRequest({...base, target: target({id: 'owner'})}).ok).toBe(false)
+    })
+
+    it('找不到成員 → 擋下，不會丟例外', () => {
+        expect(vmute.checkMuteRequest({...base, target: null}).ok).toBe(false)
+        expect(vmute.checkMuteRequest().ok).toBe(false)
+    })
+
+    it('每一種擋下都要有給使用者看的訊息', () => {
+        const cases = [
+            {...base, seconds: 45},
+            {...base, actorChannelId: null},
+            {...base, target: null},
+            {...base, target: target({user: {bot: true}})},
+            {...base, target: target({id: 'owner'})},
+            {...base, target: target({voice: {channelId: 'c9'}})},
+        ]
+        for(const input of cases){
+            const result = vmute.checkMuteRequest(input)
+            expect(result.ok).toBe(false)
+            expect(typeof result.message).toBe('string')
+            expect(result.message.length).toBeGreaterThan(0)
+        }
+    })
+
+    it('右鍵選單的固定秒數必須在允許清單裡', () => {
+        //寫死的值如果哪天被改成不合法，右鍵選單會變成「點了沒反應」
+        expect(vmute.ALLOWED_SECONDS).toContain(vmute.QUICK_MUTE_SECONDS)
+    })
+})
+

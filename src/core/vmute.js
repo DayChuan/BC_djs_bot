@@ -16,6 +16,10 @@ export const SECTION = 'vmute'
 //直接打 API 還是進得來，所以伺服器端要再驗一次。
 export const ALLOWED_SECONDS = [60, 120, 180, 240, 300, 600]
 
+//右鍵選單「靜音 N 秒」用的固定秒數。右鍵指令不能帶參數，所以只能寫死一個值。
+//必須是 ALLOWED_SECONDS 裡的其中一個 —— checkMuteRequest() 會再驗一次。
+export const QUICK_MUTE_SECONDS = 60
+
 /////////////////////////// 純函式(可單獨做單元測試) ///////////////////////////
 
 //同時當 state 的 key 與 scheduler 的 key。scheduler 的 key 是全域共用的，
@@ -26,6 +30,35 @@ export const parseSeconds = (value) => {
     const seconds = Number(value)
     if(!Number.isInteger(seconds)) return null
     return ALLOWED_SECONDS.includes(seconds) ? seconds : null
+}
+
+/**
+ * 能不能靜音這個對象。純函式：只讀傳進來的欄位，不呼叫任何 Discord API，
+ * 所以 /vmute 與右鍵選單共用同一份判斷，也寫得了單元測試。
+ *
+ * 回 {ok:true} 或 {ok:false, message}。message 是直接要回給使用者看的句子 ——
+ * 每一項邊界都要有明確回覆，靜默失敗的指令在現場等於壞掉。
+ */
+export const checkMuteRequest = ({seconds, actorChannelId, target, guildOwnerId} = {}) => {
+    if(!parseSeconds(seconds)){
+        return {ok: false, message: `時間只能是 ${ALLOWED_SECONDS.join('、')} 秒其中一個。`}
+    }
+    if(!actorChannelId){
+        return {ok: false, message: '你要先待在語音頻道裡才能使用這個功能。'}
+    }
+    if(!target){
+        return {ok: false, message: '找不到這位成員，他可能已經不在這個伺服器了。'}
+    }
+    if(target.user && target.user.bot){
+        return {ok: false, message: '不能靜音機器人。'}
+    }
+    if(guildOwnerId && target.id === guildOwnerId){
+        return {ok: false, message: '不能靜音伺服器擁有者。'}
+    }
+    if(!target.voice || target.voice.channelId !== actorChannelId){
+        return {ok: false, message: '對方不在你的語音頻道裡，只能靜音同一個頻道的人。'}
+    }
+    return {ok: true, message: null}
 }
 
 //剩餘毫秒。時間壞掉或沒有 until 一律當成 0(已到期)——
@@ -193,8 +226,10 @@ registerRestore(SECTION, restore)
 export default {
     SECTION,
     ALLOWED_SECONDS,
+    QUICK_MUTE_SECONDS,
     muteKey,
     parseSeconds,
+    checkMuteRequest,
     remainMs,
     isExpired,
     shouldUnmuteOnJoin,

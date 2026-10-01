@@ -292,7 +292,9 @@ export const action = async(interaction) => {
             await handleAutocomplete(interaction)
             return
         }
-        if(interaction.isChatInputCommand()){
+        //右鍵選單(使用者指令)跟斜線指令走同一條路：對照表是用指令名當 key，
+        //差別只在對象放在 targetMember 而不是 options，那是各指令自己的事。
+        if(interaction.isChatInputCommand() || interaction.isUserContextMenuCommand()){
             await handleChatInputCommand(interaction)
             return
         }
