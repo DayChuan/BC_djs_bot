@@ -1,7 +1,7 @@
 # U13　動態語音頻道（Join-to-Create）
 
-狀態：可開工
-進度：0/9
+狀態：程式完成，待 `yarn test` 與實機驗收
+進度：7/9
 依賴：U03（`state.js`，已完成）
 可平行：可，但**會動 `src/events/voiceStateUpdate/index.js`**，該檔目前是 U04 的領域
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -27,6 +27,8 @@
 | 開機還原掛鉤 | `registerRestore(name, fn)` | `ready` 會自動呼叫，**不用改 `events/ready/index.js`** |
 | 排程器 | `src/core/scheduler.js` | `scheduleCron(key, expr, task)`，定期掃空房間用 |
 | per-guild 設定的慣例 | `permissionRoles` / `noticeRoles` | `{伺服器id: 值}`，沒填＝該伺服器關閉這個功能 |
+| 讀環境設定 | `src/config/index.js` | `import config from '@/config'`，default 就是依 `BOT_ENV` 選好的環境物件，`config.voiceLobbies[guildId]`。這支會讀 `.env`，**測試裡要 `vi.mock('@/config')`** |
+| 測試的 logger | `tests/vmute.test.js` 開頭 | 真的 logger 會讓測試 jail 卡住，測試檔要 `vi.mock('@/core/logger')`，照抄即可 |
 
 ---
 
@@ -126,10 +128,10 @@ gateway 斷線重連期間的「最後一人離開」事件會漏掉，那間房
 | 檔案 | 職責 | 碰 discord.js？ |
 |---|---|---|
 | `src/config/voiceRoom.js` | 房名樣板、名稱長度上限、cooldown 秒數、掃描間隔 | 否 |
-| `src/core/voiceRoom.js` | 建立／搬移／刪除／紀錄讀寫／開機與定期清理 | 是 |
-| `tests/voiceRoom.test.js` | 純邏輯：房名組法與截斷、該不該刪的判斷、cooldown | 否 |
+| `src/core/voiceRoom.js` | 建立／搬移／刪除／紀錄讀寫／開機與定期清理 | 否（照 vmute.js，物件由呼叫端傳入） |
+| `tests/voiceRoom.test.js` | 純邏輯：房名組法與截斷、該不該刪的判斷、cooldown；另用假造的 guild 測 `cleanupRoom` 的三道防線 | 否 |
 
-> 可刪除的判斷請抽成純函式（輸入「紀錄、頻道是否存在、人數、是不是大廳」→ 輸出布林），
+> 可刪除的判斷抽成純函式 `decideCleanup()`，輸出 `{action: delete|forget|keep, reason}`（見決策紀錄），
 > 那是本單元唯一有邏輯的地方，也是最該測的地方。
 
 **要改的：**
@@ -154,13 +156,13 @@ gateway 斷線重連期間的「最後一人離開」事件會漏掉，那間房
 ## 進度
 
 - [x] 13-1a 兩個環境檔加 `voiceLobbies`（2026-10-01 由專案經理填入，id 見下）
-- [ ] 13-1b `src/config/voiceRoom.js`（房名樣板、長度上限、cooldown 秒數、掃描間隔）
-- [ ] 13-2 純邏輯 ＋ `tests/voiceRoom.test.js`（房名截斷、可刪判斷、cooldown）
-- [ ] 13-3 `src/core/voiceRoom.js`：建立 → 搬移 → 失敗就刪掉剛建的
-- [ ] 13-4 紀錄寫進 `state` 的 `voiceRooms` 區段
-- [ ] 13-5 離開時清理（三道防線）
-- [ ] 13-6 開機 `registerRestore` 對帳 ＋ `scheduleCron` 每 10 分鐘掃一次（**同一支函式**）
-- [ ] 13-7 `voiceStateUpdate` 改成雙功能分派
+- [x] 13-1b `src/config/voiceRoom.js`（房名樣板、長度上限、cooldown 秒數、掃描間隔）
+- [x] 13-2 純邏輯 ＋ `tests/voiceRoom.test.js`（房名截斷、可刪判斷、cooldown）
+- [x] 13-3 `src/core/voiceRoom.js`：建立 → 搬移 → 失敗就刪掉剛建的
+- [x] 13-4 紀錄寫進 `state` 的 `voiceRooms` 區段
+- [x] 13-5 離開時清理（三道防線）
+- [x] 13-6 開機 `registerRestore` 對帳 ＋ `scheduleCron` 每 10 分鐘掃一次（**同一支函式**）
+- [x] 13-7 `voiceStateUpdate` 改成雙功能分派
 - [ ] 13-8 `yarn test` 全套通過
 - [ ] 13-9 測試伺服器實機驗收，commit
 
@@ -176,6 +178,10 @@ gateway 斷線重連期間的「最後一人離開」事件會漏掉，那間房
 6. 同一個人在 cooldown 內再次觸發 → 不建立第二間
 
 **實機（測試伺服器）：**
+
+每一步都看 pm2 log（`pm2 logs bc-test`）：每次判斷都有一行 `voiceRoom 清理判斷(...)` 或 `voiceRoom 大廳判斷`，
+內容含紀錄有無、大廳 id、存在、型別、人數與 `→ action(reason)`。開機時應看到 `voiceRoom 啟用：guild=… 大廳=…`，
+缺權限會有 `bot 缺少權限` 警告。
 
 7. 點進大廳 → 自動開房並被拉進去，房名正確，房主能改名與調位元率
 8. 自己離開、房間沒人 → 房間消失
@@ -195,3 +201,20 @@ gateway 斷線重連期間的「最後一人離開」事件會漏掉，那間房
 - 2026-10-01　重複觸發時「搬去既有房間」優先於 cooldown。理由：那才是使用者真正想要的行為，cooldown 只是保險。
 - 2026-10-01　定期掃描與開機清理共用同一支函式。理由：兩份實作遲早會不一致，而不一致的那一份會安靜地刪錯東西。
 - 2026-10-01　設定用 per-guild 的 `voiceLobbies`，沒設定＝不啟用。理由：與 `permissionRoles` / `noticeRoles` 一致，正式站有兩個伺服器。
+- 2026-10-01　`src/config/voiceRoom.js` 只放數值不放邏輯，匯出方式照 `polls.js`（大寫具名常數 ＋ default 物件）。房名存「後綴」而不是樣板字串，截斷時只截 displayName、後綴永遠保留；另加 `ROOM_NAME_FALLBACK` 處理 displayName 全空白。理由：樣板字串要再解析才知道哪一段能截，後綴寫法讓截斷邏輯單純、可測。
+- 2026-10-01　`src/core/voiceRoom.js` 不 import discord.js（原檔案表寫「是」，已更正），`ChannelType.GuildVoice`(2)、`10003` 直接寫值，權限用字串。理由：照 vmute.js，純函式與實際執行的程式在同一支檔，測試測的就是正式在跑的那份。
+- 2026-10-01　`decideCleanup()` 輸出 `{action, reason}` 而不是布林，三種動作：`delete`（刪頻道＋紀錄）、`forget`（只刪紀錄，絕不刪頻道）、`keep`。理由：log 要寫得出「為什麼刪／為什麼不刪」；布林只看得到結果。
+- 2026-10-01　輸入不合法（`exists`／`isVoice` 不是真正的布林、人數不是 ≥0 整數、缺 channelId）一律 `keep`。理由：最近兩次故障都是條件拿到錯的輸入後安靜走錯分支；`undefined` 不能被當成 `false` 或 `0`。
+- 2026-10-01　第二道防線比對**所有**伺服器的大廳 id，不只本伺服器；另加「紀錄的 guildId 與目前伺服器不符 → keep」。理由：guildId 傳錯時只比本伺服器會安靜地比對不到，大廳就失去保護。
+- 2026-10-01　第三道防線用 `channel.type === GuildVoice`，不用 `isVoiceBased()`。理由：後者連舞台頻道也算，我們開的房間只會是一般語音，條件越窄越安全。
+- 2026-10-01　**先寫紀錄再搬人**（原計畫是搬成功才寫）。理由：搬失敗時要刪掉剛建的頻道，這樣它也走 `cleanupRoom()` 的三道防線，全專案只有一條刪除路徑，沒有「不經紀錄直接刪」的例外。紀錄寫入失敗時**不刪**，記 error 請人手動處理（不在紀錄裡就不碰，沒有例外）。
+- 2026-10-01　抓頻道時區分 `10003`（確定不存在 → 清紀錄）與其他錯誤（暫時抓不到 → 不判斷、紀錄保留）。理由：把暫時性錯誤當成不存在，紀錄會被丟掉，那間房就再也沒人記得要刪。
+- 2026-10-01　新房間的權限覆寫 = 抄大廳的覆寫 ＋ 房主四個權限。理由：建立時有給 `permissionOverwrites` 就不會繼承 Category，不抄的話，限定身分組可見的分類底下會多出一間所有人都看得到的房間。
+- 2026-10-01　cooldown 的時間在「決定建立」的同一個同步區段就記下（在任何 await 之前）。理由：建立途中第二個事件進來時要能被擋下。cooldown 只在記憶體，重啟歸零，可接受（它只是保險）。
+- 2026-10-01　判斷 log：有設定大廳的伺服器，每一次「清理判斷」與「大廳判斷」都寫 info，含全部輸入與結果（包括 `not-tracked`）。沒設定大廳的伺服器完全不寫。理由：`not-tracked` 也要留下，否則「紀錄 key 對不上、房間永遠不刪」這種錯在 log 上會完全安靜；未啟用的伺服器是設定上的刻意關閉，開機時已記一行「啟用：guild=…」。
+
+### 靜態分析的推論，待實機確認（信心：中）
+
+- 開機清理時 `channel.members.size` 是否已正確：依賴 discord.js 在 `ready` 前已收齊各伺服器的語音狀態。若不正確，有人的房間會在開機時被當成空房刪掉（只影響我們開的房，不影響靜態頻道）。→ 實機第 12 條驗證。
+- 「離開」事件觸發時 `channel.members` 已經是離開後的人數：依賴 discord.js 先更新快取再發事件。→ 實機第 8、9 條驗證。
+- 抄大廳覆寫時，若覆寫裡有 bot 自己沒有的權限，建立會失敗（50013），log 會有「建立房間失敗」。→ 實機第 7 條若失敗先看這裡。
