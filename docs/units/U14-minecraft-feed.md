@@ -1,7 +1,7 @@
 # U14　Minecraft 更新通知
 
-狀態：可開工（頻道 id 已齊）
-進度：0/9
+狀態：14-0 完成，feed 形狀已確認（見「14-0 結論」）；範圍改為只發 Java 版 ＋ Gemini 雙語摘要
+進度：1/9
 依賴：U03（`state.js`，已完成）
 可平行：可，全部是新檔案
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -12,15 +12,16 @@
 
 ## 目標
 
-定時讀 Minecraft 官方 RSS，有新的 Snapshot／Preview／Release 時：
+定時讀 Minecraft 官方 RSS，有新的 **Java 版** Snapshot／正式版時：
 
-1. **更新內容頻道**開一個討論串，把文章內容整包搬進去
+1. **更新內容頻道**開一個討論串，貼兩則 AI 摘要：**繁體中文一則、日文一則**，完整原文看連結
 2. **通知頻道**貼一則短通知，附原文連結與那個討論串的連結
 
-目的是讓成員**在自己的伺服器裡就能看完、就地討論**，不用跳到官網。
+目的是讓成員**在自己的伺服器裡就能看懂、就地討論**。
 
-> **AI 摘要不做**（2026-11-04 使用者決定）。先把「整包搬過來」做到會動，
-> 之後真的覺得太長再考慮加摘要。相關評估留在 `docs/units/BACKLOG.md`。
+> **範圍變更**（2026-11-04 使用者決定）：原本「不做 AI 摘要、整包搬原文」改為
+> **只發 Java 版 ＋ Gemini 產生繁中／日文摘要**。Bedrock 不發。
+> 摘要失敗時退回貼原文（有則數上限），見細節第 8 點。
 
 ---
 
@@ -34,9 +35,9 @@
 | `main.py` 的無窮迴圈 ＋ `CHECK_INTERVAL_SECONDS` | `scheduleCron()` ＋ `registerRestore()` | 專案已有排程器；自己開迴圈會跟 bot 的生命週期打架 |
 | **Discord Webhook ＋ `DISCORD_WEBHOOK_URL`** | **`channel.send()`** | bot 本來就在伺服器裡，用 webhook 等於多管一組密鑰，而且發出來的不是 bot 本人 |
 | `feedparser`（Python） | `fast-xml-parser`（新相依） | 見下方「為什麼要加這個相依」 |
-| `requests` ＋ `BeautifulSoup` 抓內文 | **先用 RSS 的 description，不夠長才抓網頁** | 少一個相依、少一個會壞的地方 |
-| 「啟動時快取最新文章 ID」 | `state.js` 的 `minecraft` 區段 | 記憶體的快取一重啟就沒了，會整串重發 |
-| `openai` SDK ＋ AI 摘要 | **不做** | 使用者 2026-11-04 決定：先整包搬過來，覺得太長再說 |
+| `requests` ＋ `BeautifulSoup` 抓內文 | **原生 `fetch` 文章頁，切出內文區塊後自己轉純文字**（14-0 確認 description 只有摘要） | 內文區塊的標籤種類很少（見 14-0 結論），不值得為它加 HTML 解析套件 |
+| 「啟動時快取最新文章 ID」 | `state.js` 的 `minecraft` 區段，key 用**文章網址** | 記憶體的快取一重啟就沒了，會整串重發；feed 沒有 guid |
+| `openai` SDK ＋ AI 摘要 | **Gemini REST API，用原生 `fetch` 呼叫，不裝 SDK**；key 放 `.env` 的 `GEMINI_API_KEY` | 免費額度夠用（一篇只呼叫兩次）；用 `fetch` 就不必多加相依 |
 
 **原始交接文件不要改**，它是需求的歷史紀錄。
 
@@ -44,7 +45,7 @@
 
 # 做法
 
-先把「有新版本就通知」做到會動。這一段**沒有任何外部 API 金鑰**，可以立刻開工、立刻上線。
+只需要一把外部金鑰：`GEMINI_API_KEY`。**沒設定就跳過摘要、直接退回貼原文**，所以沒有 key 也能上線。
 
 ## 資料流程
 
@@ -53,32 +54,38 @@
   ↓
 fetch RSS（Node 24 有原生 fetch，不用裝 http 套件）
   ↓
-解析出 items：title / link / pubDate / guid
+用 arrayBuffer() 讀 bytes → 判斷編碼（目前是 UTF-16LE 無 BOM）→ 解碼成字串
   ↓
-關鍵字過濾：標題含 snapshot / preview / update / release（不分大小寫）
+解析出 items：title / link（來自 <a10:link href>）/ pubDate
   ↓
-扣掉 state 裡「已經貼過」的 guid
+標題過濾（不分大小寫）：含 snapshot 或 java edition 才收；含 bedrock 或 preview 一律排除（排除優先）
+  ↓
+扣掉 state 裡「已經貼過」的文章網址
+  ↓
+log：抓到幾則、過濾掉幾則（列出被過濾的標題）、扣掉看過的剩幾則
   ↓
 還有剩 → 依 pubDate 由舊到新，逐則：
+     ├ fetch 文章頁，切出內文區塊，轉成純文字
+     ├ Gemini 產生繁中摘要、日文摘要（各一次呼叫；失敗處理見細節第 8 點）
      ├ 在「更新內容頻道」開討論串，名稱＝文章標題
-     ├ 把文章內容切段貼進那個討論串（一則 2000 字元上限）
+     ├ 貼繁中摘要、日文摘要（各自仍過切段函式，以防超過 2000 字元）
      └ 在「通知頻道」貼短通知：標題 ＋ 原文連結 ＋ 討論串連結
   ↓
-把 guid 寫進 state（只留最近 N 筆）
+把文章網址寫進 state（只留最近 N 筆）
 ```
 
-## 四個一定要處理的細節
+## 八個一定要處理的細節
 
 ### 1. 第一次執行不可以把整個 feed 洗版出來
 
-feed 裡有幾十篇歷史文章，對空的 state 來說**全部都是「沒貼過」**。
+feed 裡有 10 篇歷史文章（14-0 實測），對空的 state 來說**全部都是「沒貼過」**。
 
-**第一次跑（`seen` 是空的）→ 只把現有的 guid 全部記起來，一則都不發。**
+**第一次跑（`seen` 是空的）→ 只把現有的文章網址全部記起來，一則都不發。**
 這就是交接文件說的「啟動時需快取當前最新的文章 ID」，但它沒講清楚**第一次必須靜默**。
 
 ### 2. `seen` 清單要有上限
 
-每次把新 guid 塞進去，不設上限就會無限長大，而 `state.json` 每次寫入都要重寫整份。
+每次把新網址塞進去，不設上限就會無限長大，而 `state.json` 每次寫入都要重寫整份。
 
 **只留最近 200 筆**，超過就從最舊的丟。200 遠大於一次抓回來的 feed 筆數，不可能誤判成「沒看過」。
 
@@ -91,7 +98,7 @@ RSS 回來的順序不保證。**依 `pubDate` 由舊到新排**，否則畫面�
 ### 4. 任何失敗都不要寫 `seen`
 
 網路錯誤、RSS 格式怪掉、頻道不存在——一律 `logger.warn` 之後 return，
-**絕對不要把 guid 寫進 `seen`**。寫進去的話那次漏掉的更新就永遠不會補發了。
+**絕對不要把文章網址寫進 `seen`**。寫進去的話那次漏掉的更新就永遠不會補發了。
 
 ### 5. 內容要切段，而且不能切在半路
 
@@ -116,6 +123,19 @@ Discord 一則訊息上限 **2000 字元**。整篇文章塞一則會被整包�
 通知頻道貼不出去 ≠ 內容頻道貼不出去。**內容搬成功才算這篇處理完**；
 通知失敗只記 log，不要因此重發整篇內容（會變成重複搬運）。
 
+### 8. Gemini 一定會偶爾失敗，要能退回
+
+14-0 實測就遇過兩種：**404**（模型被汰換，`gemini-2.5-flash` 已不開放給新帳號）與 **503**（`high demand`，暫時性過載）。
+
+- **模型名稱放設定檔**（`src/config/minecraft.js`），汰換時只改一行
+- **503 / 429 在同一次執行內重試**：最多 3 次，間隔遞增（例如 5 秒、15 秒）。其他錯誤（401/403/404）不重試
+- 兩種語言**各自一次呼叫、各自判斷**：
+  - 一種成功一種失敗 → 成功的照貼，失敗的那一則改成一行「（日文摘要產生失敗，請看原文）」
+  - **兩種都失敗，或沒設定 `GEMINI_API_KEY`** → 退回貼原文（切段，**最多 8 則**，超過就在最後一則加「完整內容見原文」＋連結）
+- 摘要失敗**不算這篇失敗**：內容有貼出去就寫 `seen`，否則下一輪會重開討論串（違反驗收 14）
+- log 要記：用哪個模型、HTTP 狀態碼、重試了幾次、最後走摘要還是退回原文
+- 提示詞要求每份摘要 1500 字元以內、條列重點；回來的文字仍過切段函式，不信任模型守長度
+
 ## 為什麼要加 `fast-xml-parser` 這個相依
 
 專案一向很省相依（U06 連 Express 都不裝）。但 RSS 是 XML，而用字串比對或正規表達式解析 XML
@@ -127,12 +147,13 @@ Discord 一則訊息上限 **2000 字元**。整篇文章塞一則會被整包�
 
 ## 進度
 
-- [ ] 14-0 **先確認 feed 長什麼樣**（不寫程式，請使用者代跑，見下方「開工第一件事」）
-- [ ] 14-1 `src/config/minecraft.js`：RSS 網址、關鍵字、cron、`seen` 上限、訊息字元上限
+- [x] 14-0 **先確認 feed 長什麼樣**（結論見下方「14-0 結論」）
+- [ ] 14-1 `src/config/minecraft.js`：RSS 網址、收錄／排除關鍵字、cron、`seen` 上限、訊息字元上限、Gemini 模型名稱、退回原文的則數上限
 - [ ] 14-2 兩個環境檔加 `channels.minecraftNotice` / `channels.minecraftContent` ＋ `package.json` 加 `fast-xml-parser`
-- [ ] 14-3 `src/core/minecraftFeed.js` 的純邏輯：解析 items、關鍵字過濾、算出「這次要發哪些」、`seen` 上限、**內容切段**
+- [ ] 14-3 `src/core/minecraftFeed.js` 的純邏輯：**解碼 bytes**、解析 items、關鍵字過濾、算出「這次要發哪些」、`seen` 上限、**文章頁 HTML → 純文字**、**內容切段**
 - [ ] 14-4 `tests/minecraftFeed.test.js`（**這個單元的重點**，見驗收）
-- [ ] 14-5 抓 RSS、取內文、開討論串、貼內容、貼通知
+- [ ] 14-5 抓 RSS、抓文章頁、開討論串、貼內容、貼通知（先只做「退回原文」那條路，摘要接在 14-5b）
+- [ ] 14-5b `src/core/gemini.js`：呼叫 Gemini、503/429 重試、提示詞與回應解析（純函式，有測試）；接進 14-5 的貼文流程
 - [ ] 14-6 state 讀寫 ＋ `scheduleCron` ＋ `registerRestore`
 - [ ] 14-7 `yarn test` ＋ 測試伺服器實機驗收，commit
 
@@ -156,6 +177,63 @@ curl -s "https://www.minecraft.net/en-us/feeds/community-content/rss" | head -c 
 > 我（專案經理）試過從開發機抓這個 feed，**兩次都逾時**，所以沒辦法先替你確認。
 > 這一步沒做就動手，等於賭 `description` 的內容形狀，賭錯要重寫取內文那一整段。
 
+## 14-0 結論（2026-11-04 實測）
+
+實際使用的指令（在測試 jail 跑；**要帶 `-A` 瀏覽器 UA 和 `-m` 逾時**）：
+
+```sh
+curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_feed.xml -w "HTTP %{http_code}  %{size_download} bytes\n" "https://www.minecraft.net/en-us/feeds/community-content/rss"
+curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_snapshot.html -w "HTTP %{http_code}  %{size_download} bytes\n" "https://www.minecraft.net/en-us/article/minecraft-26-4-snapshot-7"
+curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  %{size_download} bytes\n" "https://www.minecraft.net/en-us/article/minecraft--bedrock-edition-26-60-changelog"
+```
+
+三個都是 HTTP 200。樣本留在測試 jail 的 `/root/`，Windows 唯讀路徑：
+`\\fongxiang.duckdns.org\mnt\iocage\jails\DiscordBot-Test\root\root\`（**jail 名稱是 `DiscordBot-Test`**，不是 `DiscordBot_test`）。
+開發機逾時的原因**推測**是沒帶瀏覽器 UA，未驗證。
+
+### RSS（11654 bytes）
+
+| 項目 | 實際 | 對實作的影響 |
+|---|---|---|
+| 編碼 | **UTF-16LE，無 BOM**（開頭 `3C 00 3F 00`，宣告 `encoding="utf-16"`） | `res.text()` 會當 UTF-8 解成夾 NUL 的亂碼，解析**安靜地**失敗。必須 `arrayBuffer()` 後依 bytes 判斷編碼再 `TextDecoder`，判斷結果記 log |
+| 篇數 | 10 篇 | `seen` 上限 200 足夠 |
+| 欄位 | `title` / `description` / `pubDate` / `<a10:link href="..."/>` | **沒有 `<guid>`、沒有 `<link>`**。連結要讀 `a10:link` 的 `href` 屬性，`seen` 的 key 用文章網址 |
+| description | **只有摘要**：版本文只有標題本身（如 `Minecraft 26.4 Snapshot 7`）或一句話（`26.60 is out now in Minecraft!`），有一篇是空的 | **不能用 description，必須抓文章頁** |
+| description 的實體 | 有雙重跳脫（`&amp;#39;`） | 不用 description，影響不大 |
+| pubDate | `Tue, 03 Nov 2026 18:00:03 Z`（結尾是 ` Z` 不是 `GMT`） | `Date` 能否解析**未驗證**。解析前把結尾 ` Z` 換成 ` GMT`，並寫單元測試確認 |
+
+當時的版本文標題：
+
+- `Minecraft 26.4 Snapshot 7`（Java 快照）
+- `Minecraft Preview 26.70.23 Changelog`、`Minecraft Preview 26.70.22`（Bedrock 預覽）
+- `Minecraft: Bedrock Edition 26.60 Changelog`（Bedrock 正式版）—— 不含 snapshot / preview / update / release 任何一個。（後來決定只發 Java 版，Bedrock 一律排除，所以不必為它加關鍵字）
+- **Java 正式版的標題格式沒有樣本**：當時 feed 裡沒有 Java 正式版。舊格式是 `Minecraft Java Edition 1.21.4`，`java edition` 抓得到；改用 26.x 版號後若只叫 `Minecraft 26.4` 就會漏。對策：被過濾掉的標題全部記進 log，第一次 Java 正式版發布時對 log 確認
+- 非版本文的例子：`Creator Pages arrive on the Marketplace`、`Everything you can test from the upcoming game drop`、`Halloween on Realms: Creeping Suspicion`
+
+### 文章頁（411311 / 482053 bytes，UTF-8）
+
+- 內文是**伺服器端直接輸出在 HTML 裡**，不是 JavaScript 載入後才產生，`fetch` 拿得到
+- 內文區塊：`class="article-text"` 底下的第一個 `<div class="MC_Link_Style_RichText">`，結尾在 `data-mc-ref="mc_social_socialShareA"`（分享列）之前。`MC_Link_Style_RichText` 頁面上共出現 3 次，另外兩次在頁尾的文章列表，**要從 `article-text` 之後找第一個**
+- 兩篇（Java 快照、Bedrock 正式版）的版面一樣
+- 內文用到的標籤：`p`、`h2`～`h5`、`ul` / `ol` / `li`（**有巢狀清單**）、`a`、`b`、`i`、`span`、`blockquote`、`code`、`pre`。沒有圖片、沒有表格
+- 有 HTML 實體（`&#39;`、`&#34;`、`&#43;`）要解碼
+- 去標籤後的長度：快照約 **11,800 字元**（約 6～7 則訊息），Bedrock 正式版約 **59,000 字元**（**約 30 則以上**）
+
+文章頁上的分類標籤（`MC_articleHeroA_category`）兩篇都是 `News`，**不能拿來分 Java／Bedrock**，只能看標題。
+
+轉純文字的規則（14-3 實作）：`h2`～`h5` 轉成 Discord 的 `##` / `###` 標題，`li` 依巢狀層級縮排並加上 `- `，`p` 和區塊結尾換行，`a` 保留文字（網址可附在後面），`code` / `pre` 用反引號包起來，其餘標籤去掉，最後解碼實體。
+這份純文字同時是**送給 Gemini 的輸入**和**摘要失敗時退回貼出的原文**。
+
+### Gemini（2026-11-04 實測）
+
+用 `curl` 帶 `x-goog-api-key` 標頭打 `https://generativelanguage.googleapis.com/v1beta/models`：
+
+- 使用者現有的 key（`AQ.` 開頭，不是常見的 `AIza`）**有效**，列得出模型
+- `models/gemini-2.5-flash:generateContent` → **404**：「no longer available to new users」，建議改用 `gemini-3.8-flash`
+- `models/gemini-3.8-flash:generateContent` → **503** `high demand`：模型存在、key 被接受，只是暫時過載。**實際生成一次成功的結果尚未取得**，14-5b 開工前要再試一次
+
+**key 只放兩個 jail 的 `.env`（`GEMINI_API_KEY`），不得寫進任何進版控的檔案。**
+
 ---
 
 ## 頻道設定（2026-11-04 使用者提供）
@@ -176,9 +254,14 @@ curl -s "https://www.minecraft.net/en-us/feeds/community-content/rss" | head -c 
 
 | 檔案 | 職責 | 碰 discord.js？ |
 |---|---|---|
-| `src/config/minecraft.js` | RSS 網址、關鍵字、cron、`seen` 上限、每則訊息字元上限 | 否 |
+| `src/config/minecraft.js` | RSS 網址、收錄／排除關鍵字、cron、`seen` 上限、每則訊息字元上限、Gemini 模型名稱、退回原文則數上限 | 否 |
 | `src/core/minecraftFeed.js` | 抓取、解析、過濾、比對、貼文、state | 是（只有貼文那段） |
+| `src/core/gemini.js` | 呼叫 Gemini REST API（原生 `fetch`）、重試、提示詞、回應解析 | 否 |
 | `tests/minecraftFeed.test.js` | 純邏輯測試 | 否 |
+| `tests/gemini.test.js` | 提示詞組裝、回應解析、哪些狀態碼要重試（不打真的 API） | 否 |
+
+**環境設定（不進版控，由使用者在兩個 jail 加）：** `.env` 加 `GEMINI_API_KEY`。
+依 CLAUDE.md 這個差異應記進 `docs/ENVIRONMENTS.md`，但該檔不在本單元領域內，要動之前先問使用者。
 
 **要改的：**
 
@@ -204,23 +287,30 @@ curl -s "https://www.minecraft.net/en-us/feeds/community-content/rss" | head -c 
 
 **單元測試**（`tests/minecraftFeed.test.js`，**不得 import discord.js**，所以解析與過濾要抽成純函式）：
 
-1. 一段寫死的 RSS XML → 解析出正確的 title / link / guid / pubDate
-2. 標題含 `Snapshot`／`snapshot`／`SNAPSHOT` 都要命中（**不分大小寫**）
-3. 不含關鍵字的一般社群文 → 過濾掉
-4. **`seen` 是空的（第一次執行）→ 回傳「不發任何一則」**，但要回「這些 guid 要記起來」
+1. 一段寫死的 RSS XML（**照 14-0 實測的形狀**：`<a10:link href>`、沒有 guid）→ 解析出正確的 title / link / pubDate
+2. 標題含 `Snapshot`／`snapshot`／`SNAPSHOT` 都要命中（**不分大小寫**）；`Minecraft Java Edition 1.21.4` 要命中
+3. 不含關鍵字的一般社群文 → 過濾掉；`Minecraft Preview 26.70.23 Changelog`、`Minecraft: Bedrock Edition 26.60 Changelog` → 過濾掉；同時含收錄字與排除字（如 `Bedrock Edition ... Snapshot`）→ **排除優先**
+4. **`seen` 是空的（第一次執行）→ 回傳「不發任何一則」**，但要回「這些網址要記起來」
 5. `seen` 已有資料 → 只回沒看過的那幾則
-6. 多則待發 → **依 pubDate 由舊到新排序**
+6. 多則待發 → **依 pubDate 由舊到新排序**（`... 18:00:03 Z` 這種格式要能正確解析）
 7. `seen` 超過上限 → 保留最新的 N 筆，最舊的被丟掉
 8. RSS 壞掉／空字串／不是 XML → 回空陣列，**不丟例外**
+9. UTF-16LE（無 BOM）的 bytes 與 UTF-8 的 bytes → 都解碼成同一段正確字串
+10. 文章頁 HTML 片段 → 只取 `article-text` 後第一個 `MC_Link_Style_RichText`，不混入頁尾的文章列表；巢狀清單有縮排、實體已解碼
+11. 找不到內文區塊 → 回空字串（呼叫端視為失敗、不寫 `seen`）
+12. （`tests/gemini.test.js`）503／429 判定要重試，401／403／404 不重試
+13. （`tests/gemini.test.js`）Gemini 回應的 JSON → 取出 `candidates[0].content.parts` 的文字；沒有 candidates、被安全過濾擋下、格式怪掉 → 回 null，**不丟例外**
 
 **實機（測試伺服器）：**
 
 9. 把 cron 暫時改成每分鐘 → 第一次跑**什麼都不發**，log 說明已記住 N 筆
 10. 手動把 state 的 `seen` 刪掉一兩筆 → 下一次跑會把那幾則補發出來
 11. 貼出來的訊息有標題與連結，點得開
-12. 把 `channels.minecraft` 設成不存在的 id → **log 有警告、bot 不崩潰、`seen` 沒有被寫入**
-13. 文章很長（超過 2000 字元）→ **自動切成多則**，接起來讀得通、沒有被截斷
+12. 把 `channels.minecraftContent` 設成不存在的 id → **log 有警告、bot 不崩潰、`seen` 沒有被寫入**
+13. 摘要失敗退回原文時，文章很長（超過 2000 字元）→ **自動切成多則**，接起來讀得通；超過 8 則時最後一則有「完整內容見原文」＋連結
 14. 同一篇文章不會重複開第二個討論串
+15. 討論串內有繁中摘要、日文摘要各一則，內容是條列重點、語言正確
+16. 把 `.env` 的 `GEMINI_API_KEY` 拿掉 → 退回貼原文，log 寫明原因，bot 不崩潰
 
 ---
 
@@ -228,8 +318,10 @@ curl -s "https://www.minecraft.net/en-us/feeds/community-content/rss" | head -c 
 
 | # | 事項 | 擋住 |
 |---|---|---|
-| 1 | **要發到哪個頻道？**（測試站與正式站各一個 id） | 14-2 |
 | 3 | 檢查頻率 30 分鐘可以嗎？（Minecraft 更新不急，太頻繁只是浪費） | 14-1，可先用預設 |
+| 6 | `docs/ENVIRONMENTS.md` 要不要記 `GEMINI_API_KEY`？CLAUDE.md 要不要更正 jail 名稱與路徑？（兩者都在本單元領域外） | 不擋 |
+
+已決定（2026-11-04）：頻道 id 已提供；關鍵字只收 `snapshot`、`java edition`；長文改由 AI 摘要處理、退回原文時上限 8 則；討論串放繁中＋日文摘要（方案 A）。
 
 ---
 
@@ -241,5 +333,16 @@ curl -s "https://www.minecraft.net/en-us/feeds/community-content/rss" | head -c 
 - 2026-11-04　**不裝 HTML 解析套件**，內文先用 RSS 的 description，太短才抓網頁粗略去標籤。理由：摘要用的文字不需要精確到那個程度。
 - 2026-11-04　**第一次執行只記 guid、一則都不發**。理由：feed 裡有幾十篇歷史文章，不這樣做上線當下就會洗版。
 - 2026-11-04　**任何失敗都不寫 `seen`**。理由：寫進去的話那次漏掉的更新永遠不會補發。
-- 2026-11-04　**不做 AI 摘要**，改成把內容整包搬進討論串。使用者決定。
+- 2026-11-04　~~**不做 AI 摘要**，改成把內容整包搬進討論串。~~ 使用者決定；同日被下方「推翻『不做 AI 摘要』」取代。
 - 2026-11-04　**摘要失敗一定要照樣貼標題與連結**。理由：通知比摘要重要得多。
+- 2026-11-04　**14-0 實測：description 只有摘要，所以內文一律從文章頁取**。上面「先用 description」那條不適用了。仍然不裝 HTML 解析套件，理由：內文在固定的 `MC_Link_Style_RichText` 區塊，用到的標籤只有十來種，自己轉就夠了。
+- 2026-11-04　**`seen` 的 key 用文章網址**。理由：feed 沒有 `<guid>`，連結是唯一穩定的識別。
+- 2026-11-04　**RSS 用 `arrayBuffer()` 讀 bytes，自己判斷編碼**。理由：feed 是無 BOM 的 UTF-16LE，`res.text()` 會安靜地解成亂碼。
+- 2026-11-04　~~關鍵字加 `changelog`~~（被下一條取代）。理由：Bedrock 正式版的標題是 `Minecraft: Bedrock Edition 26.60 Changelog`，原本的關鍵字一個都不含。
+- 2026-11-04　**只發 Java 版：收錄 `snapshot`、`java edition`；排除 `bedrock`、`preview`，排除優先**。使用者決定只要 Java 版、拿掉 `update`。排除清單是保險，防止同時含兩種字的標題混進來。文章頁的分類標籤兩篇都是 `News`，無法用來分版本，所以只能看標題；被過濾的標題記進 log，以便日後確認 Java 正式版的標題格式。
+- 2026-11-04　**推翻「不做 AI 摘要」：討論串放繁中、日文 AI 摘要各一則，原文看連結（方案 A）**。使用者決定。沒選「全文翻譯＋摘要」，理由：一篇快照會變成 15 則以上，翻譯錯了也很難察覺。
+- 2026-11-04　**用 Gemini REST API ＋ 原生 `fetch`，不裝 SDK**。理由：使用者已有可用的 key、免費額度遠超所需（一篇兩次呼叫）、`fetch` 足夠，不必再加相依。
+- 2026-11-04　**模型名稱放設定檔，目前用 `gemini-3.8-flash`**。理由：實測 `gemini-2.5-flash` 已對新帳號回 404，模型會被汰換，換的時候只改一行。
+- 2026-11-04　**503／429 在同一次執行內重試（最多 3 次），其他錯誤不重試；兩種語言各自判斷；都失敗或沒 key 就退回貼原文（上限 8 則）**。理由：實測遇過 503 high demand；摘要不應該擋住通知。
+- 2026-11-04　**摘要失敗不算這篇失敗，內容有貼出去就寫 `seen`**。理由：不寫的話下一輪會重開討論串（重複搬運）。「任何失敗都不寫 `seen`」指的是抓 RSS、抓文章頁、貼到內容頻道這些步驟。
+- 2026-11-04　**文件勘誤**：測試 jail 的名稱是 `DiscordBot-Test`，repo 路徑是 `/root/BC_djs_bot_test`。CLAUDE.md 寫的是 `DiscordBot_test` 與 `/root/BC_djs_bot`，那個檔案不在本單元的檔案領域內，要不要改由使用者決定。
