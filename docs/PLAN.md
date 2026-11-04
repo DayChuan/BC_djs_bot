@@ -27,6 +27,7 @@
 | [U11](./units/U11-lineup.md) | 楓之谷出團名單（人員表 ＋ 自動分隊） | **可開工** | 0/9 | — | 可 |
 | [U12](./units/U12-poll-lifecycle.md) | 截止前提醒 ＋ 討論串 30 天自動清理 | **可開工** | 0/9 | U10 | 可 |
 | [U13](./units/U13-dynamic-voice.md) | 動態語音頻道（Join-to-Create） | **可開工** | 0/9 | U03（已完成） | 可（會動 voiceStateUpdate） |
+| [U14](./units/U14-minecraft-feed.md) | Minecraft 更新通知（階段一 RSS、階段二 AI 摘要） | **階段一可開工** | 0/11 | U03（已完成） | 可 |
 
 已完成的單元收在 [units/done.md](./units/done.md)，平常不需要讀。
 
