@@ -1,7 +1,7 @@
 # U14　Minecraft 更新通知
 
-狀態：階段一可開工（階段二等 API key）
-進度：0/11（階段一 0/7、階段二 0/4）
+狀態：可開工（頻道 id 已齊）
+進度：0/9
 依賴：U03（`state.js`，已完成）
 可平行：可，全部是新檔案
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -12,8 +12,15 @@
 
 ## 目標
 
-定時讀 Minecraft 官方 RSS，有新的 Snapshot／Preview／Release 就自動貼到指定頻道。
-**階段二**再加上繁體中文的 AI 重點摘要。
+定時讀 Minecraft 官方 RSS，有新的 Snapshot／Preview／Release 時：
+
+1. **更新內容頻道**開一個討論串，把文章內容整包搬進去
+2. **通知頻道**貼一則短通知，附原文連結與那個討論串的連結
+
+目的是讓成員**在自己的伺服器裡就能看完、就地討論**，不用跳到官網。
+
+> **AI 摘要不做**（2026-11-04 使用者決定）。先把「整包搬過來」做到會動，
+> 之後真的覺得太長再考慮加摘要。相關評估留在 `docs/units/BACKLOG.md`。
 
 ---
 
@@ -29,13 +36,13 @@
 | `feedparser`（Python） | `fast-xml-parser`（新相依） | 見下方「為什麼要加這個相依」 |
 | `requests` ＋ `BeautifulSoup` 抓內文 | **先用 RSS 的 description，不夠長才抓網頁** | 少一個相依、少一個會壞的地方 |
 | 「啟動時快取最新文章 ID」 | `state.js` 的 `minecraft` 區段 | 記憶體的快取一重啟就沒了，會整串重發 |
-| `openai` SDK | `@anthropic-ai/sdk`（階段二） | 見「階段二」 |
+| `openai` SDK ＋ AI 摘要 | **不做** | 使用者 2026-11-04 決定：先整包搬過來，覺得太長再說 |
 
 **原始交接文件不要改**，它是需求的歷史紀錄。
 
 ---
 
-# 階段一：RSS → 貼文（不含 AI）
+# 做法
 
 先把「有新版本就通知」做到會動。這一段**沒有任何外部 API 金鑰**，可以立刻開工、立刻上線。
 
@@ -52,7 +59,10 @@ fetch RSS（Node 24 有原生 fetch，不用裝 http 套件）
   ↓
 扣掉 state 裡「已經貼過」的 guid
   ↓
-還有剩 → 依 pubDate 由舊到新逐則貼進 channels.minecraft
+還有剩 → 依 pubDate 由舊到新，逐則：
+     ├ 在「更新內容頻道」開討論串，名稱＝文章標題
+     ├ 把文章內容切段貼進那個討論串（一則 2000 字元上限）
+     └ 在「通知頻道」貼短通知：標題 ＋ 原文連結 ＋ 討論串連結
   ↓
 把 guid 寫進 state（只留最近 N 筆）
 ```
@@ -83,6 +93,29 @@ RSS 回來的順序不保證。**依 `pubDate` 由舊到新排**，否則畫面�
 網路錯誤、RSS 格式怪掉、頻道不存在——一律 `logger.warn` 之後 return，
 **絕對不要把 guid 寫進 `seen`**。寫進去的話那次漏掉的更新就永遠不會補發了。
 
+### 5. 內容要切段，而且不能切在半路
+
+Discord 一則訊息上限 **2000 字元**。整篇文章塞一則會被整包退回（不是截斷，是**整則發不出去**）。
+
+切段的規則：**優先在換行處切，其次在句號，都找不到才硬切**。
+切在單字或句子中間，讀起來會像壞掉。
+
+這段是純字串處理，**抽成純函式寫測試**。
+
+### 6. 討論串要用「內容頻道」開，不要鎖定
+
+- 用 `channels.minecraftContent` 那個頻道開討論串，名稱＝文章標題（**上限 100 字元，要截斷**）
+- `autoArchiveDuration` 設 10080（7 天，上限）
+- **不要 `setLocked(true)`** —— 這個功能的目的就是讓大家在串裡討論。
+  （U10 另外發現：鎖定還會讓一般成員的按鈕元件失效）
+
+開串失敗（缺 `CreatePublicThreads`）→ 退回直接貼在內容頻道，**不要整則漏掉**。
+
+### 7. 兩個頻道的失敗要分開看
+
+通知頻道貼不出去 ≠ 內容頻道貼不出去。**內容搬成功才算這篇處理完**；
+通知失敗只記 log，不要因此重發整篇內容（會變成重複搬運）。
+
 ## 為什麼要加 `fast-xml-parser` 這個相依
 
 專案一向很省相依（U06 連 Express 都不裝）。但 RSS 是 XML，而用字串比對或正規表達式解析 XML
@@ -92,69 +125,48 @@ RSS 回來的順序不保證。**依 `pubDate` 由舊到新排**，否則畫面�
 
 加完兩個 jail 都要 `yarn install`（`update.sh` 會在 `package.json` / `yarn.lock` 變動時自動跑）。
 
-## 階段一進度
+## 進度
 
-- [ ] 14-1 `src/config/minecraft.js`：RSS 網址、關鍵字清單、cron、`seen` 上限、內文長度門檻
-- [ ] 14-2 兩個環境檔加 `channels.minecraft`（**結構要一致**）＋ `package.json` 加 `fast-xml-parser`
-- [ ] 14-3 `src/core/minecraftFeed.js` 的純邏輯：解析 items、關鍵字過濾、算出「這次要發哪些」、`seen` 上限
+- [ ] 14-0 **先確認 feed 長什麼樣**（不寫程式，請使用者代跑，見下方「開工第一件事」）
+- [ ] 14-1 `src/config/minecraft.js`：RSS 網址、關鍵字、cron、`seen` 上限、訊息字元上限
+- [ ] 14-2 兩個環境檔加 `channels.minecraftNotice` / `channels.minecraftContent` ＋ `package.json` 加 `fast-xml-parser`
+- [ ] 14-3 `src/core/minecraftFeed.js` 的純邏輯：解析 items、關鍵字過濾、算出「這次要發哪些」、`seen` 上限、**內容切段**
 - [ ] 14-4 `tests/minecraftFeed.test.js`（**這個單元的重點**，見驗收）
-- [ ] 14-5 抓 RSS ＋ 貼文 ＋ state 讀寫
-- [ ] 14-6 `scheduleCron` ＋ `registerRestore`
+- [ ] 14-5 抓 RSS、取內文、開討論串、貼內容、貼通知
+- [ ] 14-6 state 讀寫 ＋ `scheduleCron` ＋ `registerRestore`
 - [ ] 14-7 `yarn test` ＋ 測試伺服器實機驗收，commit
+
+## 開工第一件事：先看 feed 實際長什麼樣
+
+**內容從哪來，要看了才知道**，不要照猜的寫。請使用者在 jail 裡跑：
+
+```sh
+curl -s "https://www.minecraft.net/en-us/feeds/community-content/rss" | head -c 4000
+```
+
+要確認三件事：
+
+1. 每個 `<item>` 有哪些欄位（`description`？`content:encoded`？）
+2. **`description` 裡是純文字摘要，還是完整的文章 HTML？**
+3. 最近幾則標題長什麼樣，關鍵字過濾會不會誤殺
+
+**如果 `description` 就有完整內容** → 直接用它，不必抓網頁，整個單元少一半風險。
+**如果只有一兩句摘要** → 才需要 `fetch` 文章網頁、粗略去標籤取純文字。
+
+> 我（專案經理）試過從開發機抓這個 feed，**兩次都逾時**，所以沒辦法先替你確認。
+> 這一步沒做就動手，等於賭 `description` 的內容形狀，賭錯要重寫取內文那一整段。
 
 ---
 
-# 階段二：AI 摘要（等使用者給 API key 再做）
+## 頻道設定（2026-11-04 使用者提供）
 
-**階段一驗收通過後才開始。** 需要使用者提供 `ANTHROPIC_API_KEY` 與費用上限。
+| 環境 | 通知頻道 | 更新內容頻道 |
+|---|---|---|
+| 測試站 | `1567438450800463882` | `1567438526801510400` |
+| 正式站 | `991202308597764157` | `1567438366788685925` |
 
-## 用 Claude，不是 OpenAI
-
-交接文件舉例用 OpenAI，但這個專案的開發流程本來就在 Claude 上，用同一家少管一組金鑰。
-
-```
-相依：@anthropic-ai/sdk
-模型：claude-opus-5-5（$4 / $20 每百萬 token）
-```
-
-> **成本估算**：一篇更新文大約 2000 token 進、500 token 出，一次約 **$0.018**（新台幣五角）。
-> Minecraft 一個月大概 4～8 篇，**月成本不到 10 塊台幣**。
-> 想更省可以換 `claude-haiku-4-5`（$1 / $5，約四分之一價），但那是品質與成本的取捨，由使用者決定，不要預設降級。
-
-## 實作重點
-
-```js
-import Anthropic from '@anthropic-ai/sdk'
-
-const client = new Anthropic()           // 自動讀 ANTHROPIC_API_KEY
-
-const response = await client.messages.create({
-    model: 'claude-opus-5-5',
-    max_tokens: 1500,                     // Discord embed 上限 4096 字元，不需要更多
-    output_config: {effort: 'low'},       // 摘要是簡單任務，低 effort 省錢又夠用
-    system: '用繁體中文條列重點，不要前言與結語…',
-    messages: [{role: 'user', content: 文章內文}],
-})
-```
-
-**三個硬性要求：**
-
-| 項目 | 原因 |
-|---|---|
-| **摘要失敗一定要照樣貼出標題與連結** | 通知比摘要重要得多。API 掛掉、超時、額度用完，都不該讓使用者完全不知道有新版本 |
-| 用 SDK 的型別錯誤類別（`Anthropic.RateLimitError` 等），**不要比對錯誤字串** | 字串會變，類別不會 |
-| **`ANTHROPIC_API_KEY` 不進版控** | 放各 jail 自己的 `.env`。兩個 jail 都要設，否則該站的摘要會一直失敗 |
-
-**內文從哪來**：先用 RSS 的 `description`（通常已經有一段摘要）。
-太短（例如少於 200 字）才去 `fetch` 文章網頁、粗略去掉標籤取純文字。
-**不要為了抓內文裝 HTML 解析套件**——摘要用的文字不需要那麼精確。
-
-## 階段二進度
-
-- [ ] 14-8 `@anthropic-ai/sdk` ＋ 兩個 jail 的 `.env` 各自設 `ANTHROPIC_API_KEY`
-- [ ] 14-9 `src/core/minecraftSummary.js`：組 prompt、呼叫、型別化錯誤處理
-- [ ] 14-10 內文取得：RSS description 優先，太短才抓網頁
-- [ ] 14-11 驗收：摘要正常、**故意填錯 key → 照樣貼出標題與連結**，commit
+兩個都進 `channels`：`minecraftNotice` 與 `minecraftContent`。
+**沒設定就是不啟用**，跟其他功能一致。
 
 ---
 
@@ -164,17 +176,16 @@ const response = await client.messages.create({
 
 | 檔案 | 職責 | 碰 discord.js？ |
 |---|---|---|
-| `src/config/minecraft.js` | RSS 網址、關鍵字、cron、`seen` 上限、內文長度門檻 | 否 |
+| `src/config/minecraft.js` | RSS 網址、關鍵字、cron、`seen` 上限、每則訊息字元上限 | 否 |
 | `src/core/minecraftFeed.js` | 抓取、解析、過濾、比對、貼文、state | 是（只有貼文那段） |
-| `src/core/minecraftSummary.js` | 階段二才建 | 否（只碰 Anthropic SDK） |
 | `tests/minecraftFeed.test.js` | 純邏輯測試 | 否 |
 
 **要改的：**
 
 | 檔案 | 改什麼 |
 |---|---|
-| `src/config/environments/production.js`、`test.js` | `channels` 加 `minecraft`。**兩邊結構必須一致**，`config/index.js` 的 `validate()` 會比對 |
-| `package.json` | 加 `fast-xml-parser`（階段一）、`@anthropic-ai/sdk`（階段二） |
+| `src/config/environments/production.js`、`test.js` | `channels` 加 `minecraftNotice` 與 `minecraftContent`。**兩邊結構必須一致**，`config/index.js` 的 `validate()` 會比對 |
+| `package.json` | 加 `fast-xml-parser` |
 
 **只讀，一定要看的：**
 
@@ -185,6 +196,7 @@ const response = await client.messages.create({
 | `src/core/scheduler.js` | `scheduleCron(key, expression, task)`，key 要帶前綴 |
 | `src/core/vmute.js` | `registerRestore()` 的用法；純邏輯與 discord.js 分離的寫法 |
 | `src/config/environments/test.js` | `channels` 的結構 |
+| `src/core/pollService.js` 的 `openPollThread()` | **開討論串的完整範本**：`threads.create({name, autoArchiveDuration: 10080, type, reason})`、失敗退回母頻道、名稱長度處理。注意它**刻意不鎖定**，理由寫在那一段的註解裡 |
 
 ---
 
@@ -207,7 +219,8 @@ const response = await client.messages.create({
 10. 手動把 state 的 `seen` 刪掉一兩筆 → 下一次跑會把那幾則補發出來
 11. 貼出來的訊息有標題與連結，點得開
 12. 把 `channels.minecraft` 設成不存在的 id → **log 有警告、bot 不崩潰、`seen` 沒有被寫入**
-13. 階段二：故意把 `ANTHROPIC_API_KEY` 改錯 → **照樣貼出標題與連結**，只是沒有摘要
+13. 文章很長（超過 2000 字元）→ **自動切成多則**，接起來讀得通、沒有被截斷
+14. 同一篇文章不會重複開第二個討論串
 
 ---
 
@@ -216,7 +229,6 @@ const response = await client.messages.create({
 | # | 事項 | 擋住 |
 |---|---|---|
 | 1 | **要發到哪個頻道？**（測試站與正式站各一個 id） | 14-2 |
-| 2 | **`ANTHROPIC_API_KEY` 與費用上限** | 階段二全部 |
 | 3 | 檢查頻率 30 分鐘可以嗎？（Minecraft 更新不急，太頻繁只是浪費） | 14-1，可先用預設 |
 
 ---
@@ -229,6 +241,5 @@ const response = await client.messages.create({
 - 2026-11-04　**不裝 HTML 解析套件**，內文先用 RSS 的 description，太短才抓網頁粗略去標籤。理由：摘要用的文字不需要精確到那個程度。
 - 2026-11-04　**第一次執行只記 guid、一則都不發**。理由：feed 裡有幾十篇歷史文章，不這樣做上線當下就會洗版。
 - 2026-11-04　**任何失敗都不寫 `seen`**。理由：寫進去的話那次漏掉的更新永遠不會補發。
-- 2026-11-04　**拆成兩階段，階段一不含 AI**。理由：階段一沒有任何外部金鑰，可以立刻上線；AI 卡在 API key 與費用決定，不該讓整個功能等它。
-- 2026-11-04　階段二用 Claude（`claude-opus-5-5`）而不是 OpenAI。理由：開發流程本來就在 Claude 上，少管一組金鑰。成本一個月不到 10 塊台幣。
+- 2026-11-04　**不做 AI 摘要**，改成把內容整包搬進討論串。使用者決定。
 - 2026-11-04　**摘要失敗一定要照樣貼標題與連結**。理由：通知比摘要重要得多。
