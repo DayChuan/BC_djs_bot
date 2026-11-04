@@ -75,3 +75,19 @@ if(weekdays.some((day) => day === null)) return bases.map((_, index) => index)
 真的要做時，第一件事是決定這些參數放模板還是放 `/poll` 的參數——
 放 `/poll` 會讓參數列爆掉（目前已經 15 個），放模板則 Modal 只剩不到欄位可用
 （`TEMPLATE_MODAL_FIELDS` 已滿 5 個，見 U10 的說明）。
+
+---
+
+## B5　更新通知加 AI 摘要
+
+**why**：U14 把 Minecraft 的更新內容整包搬進討論串，長文可能不好讀。
+
+**狀態：2026-11-04 使用者決定先不做。** 先把「整包搬過來」做到會動，實際用過覺得太長再說。
+
+**真要做時的評估**（已經查過）：用 `@anthropic-ai/sdk` ＋ `claude-opus-5-5`
+（$4 / $20 每百萬 token）。一篇約 2000 token 進、500 出 ≈ 新台幣五角，
+Minecraft 一個月 4～8 篇，**月成本不到 10 塊**。想更省可換 `claude-haiku-4-5`（約四分之一價）。
+
+**硬性要求**：摘要失敗一定要照樣貼出原始內容與連結——通知比摘要重要得多。
+`ANTHROPIC_API_KEY` 放各 jail 的 `.env`，不進版控。
+

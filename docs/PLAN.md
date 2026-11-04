@@ -27,7 +27,8 @@
 | [U11](./units/U11-lineup.md) | 楓之谷出團名單（人員表 ＋ 自動分隊） | **可開工** | 0/9 | — | 可 |
 | [U12](./units/U12-poll-lifecycle.md) | 截止前提醒 ＋ 討論串 30 天自動清理 | **可開工** | 0/9 | U10 | 可 |
 | [U13](./units/U13-dynamic-voice.md) | 動態語音頻道（Join-to-Create） | **可開工** | 0/9 | U03（已完成） | 可（會動 voiceStateUpdate） |
-| [U14](./units/U14-minecraft-feed.md) | Minecraft 更新通知（階段一 RSS、階段二 AI 摘要） | **階段一可開工** | 0/11 | U03（已完成） | 可 |
+| [U14](./units/U14-minecraft-feed.md) | Minecraft 更新通知（搬進討論串） | **可開工** | 0/8 | U03（已完成） | 可 |
+| [U15](./units/U15-maplestory-news.md) | 楓之谷更新公告搬運 | 缺資訊 | 0/8 | U14 | 不可與 U14 平行 |
 
 已完成的單元收在 [units/done.md](./units/done.md)，平常不需要讀。
 
@@ -45,6 +46,7 @@ U01、U02、U03 皆已完成；U08、U09 已於 2026-08-25 驗收結案，見 [u
 
 | 單元 | 事項 |
 |---|---|
+| U15 | 楓之谷官方 Discord 的公告頻道可不可以用內建的「追蹤」功能？官網公告頁有沒有 RSS？哪些公告算「重要」？要發到哪兩個頻道？ |
 | U06 | `fongxiang.duckdns.org:5990` 是既有的檔案服務，還是要我們自己起 server？NAS 資料夾在 jail 內的掛載點？身分組與資料夾的對照？（只擋下載路由，前面的部分可以先做） |
 
 U04 與 U05 的待決事項已於 2026-08-20 全部確認，見各自單元檔的決策紀錄。
