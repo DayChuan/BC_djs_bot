@@ -1,7 +1,7 @@
 # U14　Minecraft 更新通知
 
-狀態：14-0 完成，feed 形狀已確認（見「14-0 結論」）；範圍改為只發 Java 版 ＋ Gemini 雙語摘要
-進度：1/9
+狀態：程式與測試已完成並 commit，等 jail 端 `yarn test` 與實機驗收
+進度：8/10
 依賴：U03（`state.js`，已完成）
 可平行：可，全部是新檔案
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -128,12 +128,12 @@ Discord 一則訊息上限 **2000 字元**。整篇文章塞一則會被整包�
 14-0 實測就遇過兩種：**404**（模型被汰換，`gemini-2.5-flash` 已不開放給新帳號）與 **503**（`high demand`，暫時性過載）。
 
 - **模型名稱放設定檔**（`src/config/minecraft.js`），汰換時只改一行
-- **503 / 429 在同一次執行內重試**：最多 3 次，間隔遞增（例如 5 秒、15 秒）。其他錯誤（401/403/404）不重試
+- **依序換模型**（`GEMINI_MODELS`：3.5-flash → 3.6-flash → 3.8-flash）：503／429／404／5xx／逾時／200 但沒有文字 → 換下一個；400／401／403（key 的問題）→ 直接放棄。不在同一個模型上重試
 - 兩種語言**各自一次呼叫、各自判斷**：
   - 一種成功一種失敗 → 成功的照貼，失敗的那一則改成一行「（日文摘要產生失敗，請看原文）」
   - **兩種都失敗，或沒設定 `GEMINI_API_KEY`** → 退回貼原文（切段，**最多 8 則**，超過就在最後一則加「完整內容見原文」＋連結）
 - 摘要失敗**不算這篇失敗**：內容有貼出去就寫 `seen`，否則下一輪會重開討論串（違反驗收 14）
-- log 要記：用哪個模型、HTTP 狀態碼、重試了幾次、最後走摘要還是退回原文
+- log 要記：每次嘗試的模型與 HTTP 狀態碼、最後用哪個模型成功或退回原文
 - 提示詞要求每份摘要 1500 字元以內、條列重點；回來的文字仍過切段函式，不信任模型守長度
 
 ## 為什麼要加 `fast-xml-parser` 這個相依
@@ -148,14 +148,15 @@ Discord 一則訊息上限 **2000 字元**。整篇文章塞一則會被整包�
 ## 進度
 
 - [x] 14-0 **先確認 feed 長什麼樣**（結論見下方「14-0 結論」）
-- [ ] 14-1 `src/config/minecraft.js`：RSS 網址、收錄／排除關鍵字、cron、`seen` 上限、訊息字元上限、Gemini 模型名稱、退回原文的則數上限
-- [ ] 14-2 兩個環境檔加 `channels.minecraftNotice` / `channels.minecraftContent` ＋ `package.json` 加 `fast-xml-parser`
-- [ ] 14-3 `src/core/minecraftFeed.js` 的純邏輯：**解碼 bytes**、解析 items、關鍵字過濾、算出「這次要發哪些」、`seen` 上限、**文章頁 HTML → 純文字**、**內容切段**
-- [ ] 14-4 `tests/minecraftFeed.test.js`（**這個單元的重點**，見驗收）
-- [ ] 14-5 抓 RSS、抓文章頁、開討論串、貼內容、貼通知（先只做「退回原文」那條路，摘要接在 14-5b）
-- [ ] 14-5b `src/core/gemini.js`：呼叫 Gemini、503/429 重試、提示詞與回應解析（純函式，有測試）；接進 14-5 的貼文流程
-- [ ] 14-6 state 讀寫 ＋ `scheduleCron` ＋ `registerRestore`
-- [ ] 14-7 `yarn test` ＋ 測試伺服器實機驗收，commit
+- [x] 14-1 `src/config/minecraft.js`：RSS 網址、收錄／排除關鍵字、cron、`seen` 上限、訊息字元上限、Gemini 模型清單、退回原文的則數上限
+- [x] 14-2 兩個環境檔加 `channels.minecraftNotice` / `channels.minecraftContent` ＋ `package.json` 加 `fast-xml-parser@^5.12.0`
+- [x] 14-3 `src/core/minecraftFeed.js` 的純邏輯：**解碼 bytes**、解析 items、關鍵字過濾、算出「這次要發哪些」、`seen` 上限、**文章頁 HTML → 純文字**、**內容切段**、摘要提示詞
+- [x] 14-4 `tests/minecraftFeed.test.js`（含用假 client／假 fetch 跑整段 `runCheck`）
+- [x] 14-5 抓 RSS、抓文章頁、開討論串、貼內容、貼通知；`/mc_check` 指令
+- [x] 14-5b `src/core/gemini.js`：呼叫 Gemini、依序換模型、回應解析；`tests/gemini.test.js`
+- [x] 14-6 state 讀寫 ＋ `scheduleCron` ＋ `registerRestore`
+- [ ] 14-7 `yarn test` ＋ 測試伺服器實機驗收（程式已 commit，等使用者在 jail 跑，步驟見「實機驗收步驟」）
+- [ ] 14-8 把 jail 裡 `yarn install` 更新過的 `yarn.lock` 帶回版控（見決策紀錄）
 
 ## 開工第一件事：先看 feed 實際長什麼樣
 
@@ -256,9 +257,10 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 |---|---|---|
 | `src/config/minecraft.js` | RSS 網址、收錄／排除關鍵字、cron、`seen` 上限、每則訊息字元上限、Gemini 模型名稱、退回原文則數上限 | 否 |
 | `src/core/minecraftFeed.js` | 抓取、解析、過濾、比對、貼文、state | 是（只有貼文那段） |
-| `src/core/gemini.js` | 呼叫 Gemini REST API（原生 `fetch`）、重試、提示詞、回應解析 | 否 |
+| `src/core/gemini.js` | 呼叫 Gemini REST API（原生 `fetch`）、依序換模型、回應解析。不認識業務，提示詞在 `minecraftFeed.js` | 否 |
+| `src/commands/mc_check/index.js` | `/mc_check`（管理員）：立刻檢查一次並回報；**同時負責讓 `minecraftFeed.js` 被載入**（loader 不掃 `src/core/`，沒人 import 的話排程不會掛上） | 是 |
 | `tests/minecraftFeed.test.js` | 純邏輯測試 | 否 |
-| `tests/gemini.test.js` | 提示詞組裝、回應解析、哪些狀態碼要重試（不打真的 API） | 否 |
+| `tests/gemini.test.js` | 回應解析、哪些狀態碼換模型、換模型流程（假 fetch，不打真的 API） | 否 |
 
 **環境設定（不進版控，由使用者在兩個 jail 加）：** `.env` 加 `GEMINI_API_KEY`。
 依 CLAUDE.md 這個差異應記進 `docs/ENVIRONMENTS.md`，但該檔不在本單元領域內，要動之前先問使用者。
@@ -267,7 +269,7 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 
 | 檔案 | 改什麼 |
 |---|---|
-| `src/config/environments/production.js`、`test.js` | `channels` 加 `minecraftNotice` 與 `minecraftContent`。**兩邊結構必須一致**，`config/index.js` 的 `validate()` 會比對 |
+| `src/config/environments/production.js`、`test.js` | `channels` 加 `minecraftNotice` 與 `minecraftContent`。**兩邊結構必須一致**。（勘誤：`config/index.js` 的 `validate()` 只比對 `roles`，**不會**比對 `channels`；本單元改由 `tests/minecraftFeed.test.js` 檢查兩邊都有這兩個 id） |
 | `package.json` | 加 `fast-xml-parser` |
 
 **只讀，一定要看的：**
@@ -312,6 +314,24 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 15. 討論串內有繁中摘要、日文摘要各一則，內容是條列重點、語言正確
 16. 把 `.env` 的 `GEMINI_API_KEY` 拿掉 → 退回貼原文，log 寫明原因，bot 不崩潰
 
+### 實機驗收步驟（測試 jail `DiscordBot-Test`，repo 在 `/root/BC_djs_bot_test`）
+
+第 9 條不必改 cron：用 `/mc_check` 觸發，走的是跟排程完全同一條路徑。
+
+1. 兩個 jail 的 `.env` 加 `GEMINI_API_KEY=...`
+2. push 之後在 jail 跑 `/root/update.sh`（會因 `package.json` 變動自動 `yarn install`）
+3. `cd /root/BC_djs_bot_test && yarn test` → 全部通過
+4. `yarn deploy`（註冊新指令 `/mc_check`）→ `pm2 restart bc-test`
+5. log 裡要有 `排程已註冊：minecraft:feed cron=「*/30 * * * *」`。**沒有這行 = 排程沒掛上**
+6. `/mc_check` → 回「首次執行，記住 N 篇，不發送」；兩個頻道都沒有新訊息（驗收 9）
+7. 再 `/mc_check` → 「沒有新文章」
+8. 編輯 `data/state.json` 的 `minecraft.seen`，刪掉 `minecraft-26-4-snapshot-7` 那一筆 → `/mc_check` → 內容頻道開出討論串（標題＋原文連結、中文摘要、日文摘要），通知頻道有通知、兩個連結點得開（驗收 10、11、15）
+9. 再 `/mc_check` → 「沒有新文章」，沒有第二個討論串（驗收 14）
+10. `.env` 暫時拿掉 `GEMINI_API_KEY`、重啟、重做第 8 步 → 討論串裡是原文（切段、最多 8 則）（驗收 13、16）。做完把 key 放回去
+11. `test.js` 的 `minecraftContent` 暫時改成不存在的 id、重做第 8 步 → log 有警告、bot 沒崩潰、`seen` 沒有加回那一筆（驗收 12）。做完改回來，**不要 commit 這個改動**
+
+每一步把 `/mc_check` 的回覆與 `grep -i minecraft` 的 log 貼回來。
+
 ---
 
 ## 待使用者決定
@@ -319,7 +339,7 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 | # | 事項 | 擋住 |
 |---|---|---|
 | 3 | 檢查頻率 30 分鐘可以嗎？（Minecraft 更新不急，太頻繁只是浪費） | 14-1，可先用預設 |
-| 6 | `docs/ENVIRONMENTS.md` 要不要記 `GEMINI_API_KEY`？CLAUDE.md 要不要更正 jail 名稱與路徑？（兩者都在本單元領域外） | 不擋 |
+| 6 | `docs/ENVIRONMENTS.md` 要不要記 `GEMINI_API_KEY`？（`docs/DEPLOY.md` 也可能要補「新增指令後要 `yarn deploy`」，本單元沒讀過該檔，未確認）CLAUDE.md 要不要更正 jail 名稱與路徑？（兩者都在本單元領域外） | 不擋 |
 
 已決定（2026-11-04）：頻道 id 已提供；關鍵字只收 `snapshot`、`java edition`；長文改由 AI 摘要處理、退回原文時上限 8 則；討論串放繁中＋日文摘要（方案 A）。
 
@@ -344,5 +364,15 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 - 2026-11-04　**用 Gemini REST API ＋ 原生 `fetch`，不裝 SDK**。理由：使用者已有可用的 key、免費額度遠超所需（一篇兩次呼叫）、`fetch` 足夠，不必再加相依。
 - 2026-11-04　**模型名稱放設定檔，目前用 `gemini-3.8-flash`**。理由：實測 `gemini-2.5-flash` 已對新帳號回 404，模型會被汰換，換的時候只改一行。
 - 2026-11-04　**503／429 在同一次執行內重試（最多 3 次），其他錯誤不重試；兩種語言各自判斷；都失敗或沒 key 就退回貼原文（上限 8 則）**。理由：實測遇過 503 high demand；摘要不應該擋住通知。
+- 2026-11-04　**模型改成依序換：`gemini-3.5-flash` → `3.6-flash` → `3.8-flash`，取代「同一模型重試 3 次」**。使用者決定以 3.5-flash 為主。實測 3.5-flash 生成成功、3.8-flash 回 503、2.5-flash 回 404；3.6-flash 未實測。404 也換下一個（模型被汰換時功能不中斷）；400／401／403 是 key 的問題，換模型沒用，直接放棄。
+- 2026-11-04　**新增 `/mc_check`（管理員）**，使用者同意。理由：loader 只掃 `commands/` 與 `events/`，`minecraftFeed.js` 沒人 import 的話 `registerRestore` 不會執行，排程永遠掛不上而且 log 一片乾淨（同 U05 的地雷 2）。順便讓實機驗收不必改 cron 再重啟。不改 `events/ready/index.js`，因為那是各單元共用的檔案。
+- 2026-11-04　**首次執行看 `initialized` 旗標，不看「`seen` 是空的」**。理由：第一次剛好沒有 Java 文章時 `seen` 是空的，用它判斷的話之後每一輪都會被當成首次，新文章永遠不會發。
+- 2026-11-04　**`seen` 一篇寫一次，不等整輪結束**。理由：後面某篇失敗時不會連累前面已經貼出去的（否則下一輪會重貼）。
+- 2026-11-04　**「內容處理完」= 討論串（或內容頻道）的第一則（標題＋原文連結）有貼出去**。第一則失敗就刪掉剛開的討論串、不寫 `seen`；第一則之後個別失敗只記 log。理由：留一個空討論串的話下一輪重試會再開一個。
+- 2026-11-04　**加記憶體鎖**：排程與 `/mc_check` 同時觸發時後到的略過。理由：否則同一篇會貼兩次。
+- 2026-11-04　**`minecraftFeed.js` 不 import discord.js**：討論串類型直接寫 `11`（`ChannelType.PublicThread`）。理由：這樣測試檔能 import 它，連整段 `runCheck` 都能用假 client 測。
+- 2026-11-04　**所有訊息帶 `allowedMentions: {parse: []}`**。理由：文章或 AI 摘要裡出現 `@everyone` 也不能真的 tag 到人。
+- 2026-11-04　**提示詞放 `minecraftFeed.js`，`gemini.js` 只管呼叫**。理由：`gemini.js` 不認識業務，之後別的功能要用 Gemini 可以直接共用。
+- 2026-11-04　**`yarn.lock` 有進版控，但這個目錄不能跑 `yarn`**，所以這次 commit 只改了 `package.json`。jail 端 `update.sh` 會自己 `yarn install`，但那份更新過的 `yarn.lock` 只在 jail 裡。待辦 14-8：測試 jail 裝完後，我從 Windows 唯讀路徑把 jail 的 `yarn.lock` 複製回本目錄 commit。不補的話，正式 jail `git pull` 時會因本機改過的 `yarn.lock` 擋住後續更新。
 - 2026-11-04　**摘要失敗不算這篇失敗，內容有貼出去就寫 `seen`**。理由：不寫的話下一輪會重開討論串（重複搬運）。「任何失敗都不寫 `seen`」指的是抓 RSS、抓文章頁、貼到內容頻道這些步驟。
 - 2026-11-04　**文件勘誤**：測試 jail 的名稱是 `DiscordBot-Test`，repo 路徑是 `/root/BC_djs_bot_test`。CLAUDE.md 寫的是 `DiscordBot_test` 與 `/root/BC_djs_bot`，那個檔案不在本單元的檔案領域內，要不要改由使用者決定。

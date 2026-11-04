@@ -18,6 +18,8 @@ export default {
         admin: '1178663046672044112',   //管理員看到的 ERROR
         role: '893157631370338325',     //身分組領取頻道
         japanese: '1217432781877940305',    //每日日文分享
+        minecraftNotice: '991202308597764157',      //Minecraft 更新通知(U14)
+        minecraftContent: '1567438366788685925',    //Minecraft 更新內容，在這裡開討論串(U14)
     },
 
     //功能限定的身分組。
