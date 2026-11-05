@@ -500,7 +500,15 @@ const postArticle = async(client, item) => {
 
     let target = parent
     let thread = null
-    if(typeof (parent.threads && parent.threads.create) === 'function'){
+
+    //設定的「更新內容頻道」本身就是一個討論串時，直接貼進去，不要再開新的
+    //(討論串裡也開不出討論串)。2026-11-05 使用者確認這是刻意的設定：
+    //更新量是一個月幾篇，全部累積在同一串比每次開一條新的好找，
+    //也不會讓頻道側邊欄長出一排討論串。
+    if(parent.isThread && parent.isThread()){
+        logger.info(`Minecraft：更新內容目標本身是討論串 ${parent.id}，直接貼進去`)
+    }
+    else if(typeof (parent.threads && parent.threads.create) === 'function'){
         try{
             thread = await parent.threads.create({
                 name: buildThreadName(item.title),
@@ -519,6 +527,7 @@ const postArticle = async(client, item) => {
     else{
         logger.warn(`Minecraft：更新內容頻道 ${parent.id} 不支援討論串，改直接貼在頻道裡`)
     }
+
 
     let first = null
     try{
