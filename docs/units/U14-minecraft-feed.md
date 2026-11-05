@@ -1,7 +1,7 @@
 # U14　Minecraft 更新通知
 
 狀態：程式與測試已完成並 commit，等 jail 端 `yarn test` 與實機驗收
-進度：8/10
+進度：9/10（只剩實機驗收）
 依賴：U03（`state.js`，已完成）
 可平行：可，全部是新檔案
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -155,8 +155,8 @@ Discord 一則訊息上限 **2000 字元**。整篇文章塞一則會被整包�
 - [x] 14-5 抓 RSS、抓文章頁、開討論串、貼內容、貼通知；`/mc_check` 指令
 - [x] 14-5b `src/core/gemini.js`：呼叫 Gemini、依序換模型、回應解析；`tests/gemini.test.js`
 - [x] 14-6 state 讀寫 ＋ `scheduleCron` ＋ `registerRestore`
-- [ ] 14-7 `yarn test` ＋ 測試伺服器實機驗收（程式已 commit，等使用者在 jail 跑，步驟見「實機驗收步驟」）
-- [ ] 14-8 把 jail 裡 `yarn install` 更新過的 `yarn.lock` 帶回版控（見決策紀錄）
+- [~] 14-7 `yarn test` 已通過（2026-11-05，21 檔 732 條全綠）；**實機驗收待做**，步驟見「實機驗收步驟」
+- [x] 14-8 把 jail 裡 `yarn install` 更新過的 `yarn.lock` 帶回版控（2026-11-05）
 
 ## 開工第一件事：先看 feed 實際長什麼樣
 
@@ -373,6 +373,8 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 - 2026-11-04　**`minecraftFeed.js` 不 import discord.js**：討論串類型直接寫 `11`（`ChannelType.PublicThread`）。理由：這樣測試檔能 import 它，連整段 `runCheck` 都能用假 client 測。
 - 2026-11-04　**所有訊息帶 `allowedMentions: {parse: []}`**。理由：文章或 AI 摘要裡出現 `@everyone` 也不能真的 tag 到人。
 - 2026-11-04　**提示詞放 `minecraftFeed.js`，`gemini.js` 只管呼叫**。理由：`gemini.js` 不認識業務，之後別的功能要用 Gemini 可以直接共用。
-- 2026-11-04　**`yarn.lock` 有進版控，但這個目錄不能跑 `yarn`**，所以這次 commit 只改了 `package.json`。jail 端 `update.sh` 會自己 `yarn install`，但那份更新過的 `yarn.lock` 只在 jail 裡。待辦 14-8：測試 jail 裝完後，我從 Windows 唯讀路徑把 jail 的 `yarn.lock` 複製回本目錄 commit。不補的話，正式 jail `git pull` 時會因本機改過的 `yarn.lock` 擋住後續更新。
+- 2026-11-04　**`yarn.lock` 有進版控，但這個目錄不能跑 `yarn`**，所以該次 commit 只改了 `package.json`。jail 端 `update.sh` 會自己 `yarn install`，更新過的 `yarn.lock` 只在 jail 裡。
+- 2026-11-05　**14-8 完成**：測試 jail 裝好之後（`success Saved lockfile.`），從唯讀路徑把 jail 的 `yarn.lock` 複製回本目錄 commit，新增 `fast-xml-parser@5.12.0` 與它的相依 `@nodable/entities`，共 52 行。
+- 2026-11-05　~~「不補 `yarn.lock` 的話正式 jail `git pull` 會被本機修改擋住」~~ **這個理由是錯的**：正式站也有自己的 `update.sh`，用的是 `git reset --hard origin/main`，本機修改一律被丟棄，不會擋住更新。補 `yarn.lock` 的真正理由是**版本可重現**——不補的話兩個 jail 各自解析 `^5.12.0`，可能裝到不同的修補版，而且本機與 jail 的相依樹會長期對不起來。
 - 2026-11-04　**摘要失敗不算這篇失敗，內容有貼出去就寫 `seen`**。理由：不寫的話下一輪會重開討論串（重複搬運）。「任何失敗都不寫 `seen`」指的是抓 RSS、抓文章頁、貼到內容頻道這些步驟。
 - 2026-11-04　**文件勘誤**：測試 jail 的名稱是 `DiscordBot-Test`，repo 路徑是 `/root/BC_djs_bot_test`。CLAUDE.md 寫的是 `DiscordBot_test` 與 `/root/BC_djs_bot`，那個檔案不在本單元的檔案領域內，要不要改由使用者決定。

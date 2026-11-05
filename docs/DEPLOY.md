@@ -11,7 +11,7 @@
 
 ```
 NAS 編輯 ──commit──> unit/UXX 分支 ──merge──> test 分支 ──push──>
-   測試 jail 抓下來驗證 ──通過──> test 快轉到 main ──> 正式 jail git pull
+   測試 jail sh update.sh 驗證 ──通過──> test 快轉到 main ──> 正式 jail sh update.sh
 ```
 
 ---
@@ -103,15 +103,21 @@ git push origin test:main
 
 ## 5. 正式 jail `DiscordBot`：部署
 
+**正式站也有自己的 `/root/update.sh`，跟測試站同一套流程**（2026-11-05 確認）：
+
 ```sh
 cd /root/BC_djs_bot
 git log -1 --oneline          # 先記下目前的 commit，回滾要用
-git pull origin main
-yarn install                  # 相依有變動時必須跑
-yarn deploy                   # 指令有增減時必跑；沒變會自己跳過，每次都跑也沒關係
-pm2 restart bc-djs-bot
+sh /root/update.sh
 tail -30 logs/$(date +%Y-%m-%d).log
 ```
+
+`update.sh` 做的事：`git fetch origin main` → `reset --hard origin/main` →
+`package.json` / `yarn.lock` 有變動才 `yarn install` → `yarn deploy` → `pm2 restart bc-djs-bot`。
+
+**兩站都用 `reset --hard`，不是 `git pull`。** 差別很重要：
+`reset --hard` 會丟棄 jail 本機被改過的檔案（例如 `yarn install` 改寫的 `yarn.lock`），
+所以本機修改永遠不會擋住更新。先前本文件記載正式站用 `git pull` 是錯的。
 
 ---
 
