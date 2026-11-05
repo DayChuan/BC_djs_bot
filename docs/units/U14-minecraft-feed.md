@@ -399,6 +399,39 @@ RSS 解析、UTF-16 解碼、文章頁、`htmlToText`、切段、討論串、摘
 
 **Gemini 那邊維持用 Node 的 `fetch`**，Google 的 API 沒有這個問題，實測正常。
 
+## 2026-11-05 實機驗收的兩個發現
+
+### ① AI 摘要全部失敗：`.env` 的編碼問題，不是金鑰錯
+
+```
+Gemini[zh]：gemini-3.5-flash 呼叫失敗(Cannot convert argument to a ByteString
+because the character at index 0 has a value of 65533 which is greater than 255.)
+```
+
+**65533 = U+FFFD（�，取代字元）**，而且在**第 0 個字元**。
+金鑰是直接塞進 HTTP header 的，而 header 只容得下 Latin-1（0–255），
+所以金鑰開頭有一個非 ASCII 字元就會丟這個錯。
+
+U+FFFD 代表「這段 bytes 不是合法的 UTF-8」——也就是 `.env` 裡那一行的編碼壞了。
+`TOKEN` 那些舊的行都正常，只有 `GEMINI_API_KEY` 壞掉，典型原因是用
+PowerShell 的 `>>` 或 `Add-Content` 附加（Windows PowerShell 5.1 的預設不是 UTF-8）。
+
+**使用者端的修法**：在 jail 裡用 `vi` 把那一行重打一次，存成純 ASCII。
+
+**程式端已補**：`gemini.js` 在呼叫前先檢查金鑰是不是可列印 ASCII，
+不是就記一行看得懂的 ERROR 並直接放棄，不再對每個模型、每種語言各噴一次那串天書
+（這次就噴了 6 次）。
+
+### ② 更新內容頻道不支援討論串
+
+```
+[WARN] Minecraft：更新內容頻道 1567438526801510400 不支援討論串，改直接貼在頻道裡
+```
+
+退回機制有正常運作（直接貼進頻道，8 則），但設計上是要開討論串的。
+**待使用者確認那個頻道的類型**——一般文字頻道與論壇頻道都支援討論串，
+語音頻道的聊天室與公告頻道以外的特殊類型則不支援。
+
 ## 決策紀錄
 
 - 2026-11-04　**不用 Discord Webhook，用 `channel.send()`**。理由：bot 本來就在伺服器裡，webhook 等於多管一組密鑰，而且發出來的不是 bot 本人。
@@ -429,6 +462,7 @@ RSS 解析、UTF-16 解碼、文章頁、`htmlToText`、切段、討論串、摘
 - 2026-11-04　**提示詞放 `minecraftFeed.js`，`gemini.js` 只管呼叫**。理由：`gemini.js` 不認識業務，之後別的功能要用 Gemini 可以直接共用。
 - 2026-11-04　**`yarn.lock` 有進版控，但這個目錄不能跑 `yarn`**，所以該次 commit 只改了 `package.json`。jail 端 `update.sh` 會自己 `yarn install`，更新過的 `yarn.lock` 只在 jail 裡。
 - 2026-11-05　**14-8 完成**：測試 jail 裝好之後（`success Saved lockfile.`），從唯讀路徑把 jail 的 `yarn.lock` 複製回本目錄 commit，新增 `fast-xml-parser@5.12.0` 與它的相依 `@nodable/entities`，共 52 行。
+- 2026-11-05　**金鑰在送出前先檢查是不是可列印 ASCII**。理由：非 ASCII 會讓 undici 丟一串看不懂的 ByteString 錯誤，而且每個模型每種語言各噴一次；真正的原因是 `.env` 的編碼，訊息要直接講出來。
 - 2026-11-05　**minecraft.net 的抓取改用 curl，不用 Node 的 `fetch`**。理由：四輪實測確認 Node 被 403 擋死而 curl 可以，補 header 無效，feed 與文章頁都一樣。改動只在 `fetchBytes()` 一個函式。
 - 2026-11-05　**否決 `javaPatchNotes.json`**。它的格式好很多，但 2024-02-07 之後就停更了，採用會變成「永遠沒有新文章」而且不報錯。
 - 2026-11-05　**否決「只做版本通知」（`version_manifest_v2.json`）**。使用者選 A：核心需求就是把內容搬回來讓大家就地討論，拿掉內容等於拿掉這個功能的意義。

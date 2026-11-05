@@ -51,6 +51,25 @@ export const generateText = async(prompt, {models = [], timeoutMs = 90000, apiKe
         return {text: null, model: null, reason: 'no-key'}
     }
 
+    //金鑰會直接塞進 HTTP header，而 header 只容得下 Latin-1(0-255)。
+    //含非 ASCII 字元時 undici 會丟
+    //「Cannot convert argument to a ByteString because the character at index N
+    //  has a value of 65533 which is greater than 255」——
+    //65533 是 U+FFFD(�)，代表 .env 那一行的 bytes 不是合法的 UTF-8，
+    //多半是用 PowerShell 的 >> 或 Add-Content 附加時寫成 UTF-16／ANSI。
+    //
+    //在這裡先擋下來並講清楚，不然那串訊息會對每個模型、每種語言各噴一次，
+    //而且看的人完全不會聯想到是檔案編碼的問題。
+    const badAt = [...String(apiKey)].findIndex((ch) => ch.charCodeAt(0) > 126 || ch.charCodeAt(0) < 32)
+    if(badAt >= 0){
+        logger.error(
+            `${label}：GEMINI_API_KEY 第 ${badAt + 1} 個字元不是可列印的 ASCII` +
+            `(U+${String(apiKey).charCodeAt(badAt).toString(16).toUpperCase().padStart(4, '0')})，` +
+            '這是 .env 的編碼問題不是金鑰本身。請在 jail 裡用 vi 重打那一行，存成純 ASCII／UTF-8。'
+        )
+        return {text: null, model: null, reason: 'bad-key'}
+    }
+
     for(const model of models){
         try{
             const res = await fetch(`${API_BASE}/${model}:generateContent`, {
