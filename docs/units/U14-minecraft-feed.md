@@ -345,6 +345,60 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 
 ---
 
+## 2026-11-05：抓取改用 curl（Node 的 fetch 被 403 擋死）
+
+實機驗收第一步 `/mc_check` 就失敗：`Minecraft feed 抓取失敗：HTTP 403`。
+
+### 四輪實測（都在測試 jail）
+
+| 測試 | 結果 |
+|---|---|
+| `curl -A "Mozilla/5.0" <feed>` | **200** |
+| `curl` 完整瀏覽器 UA ＋ Accept ＋ Accept-Language | **200** |
+| **Node `fetch` 同一個 UA（feed）** | **403** |
+| **Node `fetch` 同一個 UA（文章頁）** | **403** |
+| Node `fetch` ＋ 完整 UA ＋ Accept ＋ Accept-Language ＋ Sec-Fetch-* | **403** |
+| 再觸發一次 `/mc_check` | 一樣 403（可重現，不是暫時性的） |
+
+**同一台機器、同一個 UA、同一個網址，curl 過、Node 不過，而且補 header 無效。**
+所以不是 UA、不是 header，是 minecraft.net 前面的 Akamai 在看 TLS 握手與請求指紋，
+而 Node 內建的 undici 跟 curl 的指紋完全不同。**feed 與文章頁都被擋**。
+
+### 評估過但否決的替代來源
+
+`https://launchercontent.mojang.com/javaPatchNotes.json`（啟動器的 Java 更新說明）
+格式漂亮得多——純 JSON、有 `type`（snapshot／release）、`body` 直接就是完整 HTML，
+換過去可以刪掉 UTF-16 解碼、XML 解析、關鍵字過濾、文章頁抓取。**但它是死的**：
+
+```
+總筆數 230，最新一筆 Minecraft Snapshot 24w03b
+last-modified: Wed, 07 Feb 2024 17:42:08 GMT
+```
+
+2024 年 2 月之後就沒更新了。採用的話會變成「永遠沒有新文章」，而且不會報錯。
+
+`version_manifest_v2.json` 是活的，但**只有版本號沒有內文**，搬不了內容。
+
+### 結論：HTTP 那一層換成 curl
+
+改動只在 `fetchBytes()` 一個函式——整個模組只有它碰網路。
+RSS 解析、UTF-16 解碼、文章頁、`htmlToText`、切段、討論串、摘要、`seen`、排程**全部不動**，
+單元測試也不用改（它們測的是純函式）。
+
+實作上的四個要點（都寫進程式註解了）：
+
+| 項目 | 理由 |
+|---|---|
+| `encoding: 'buffer'` | feed 是 UTF-16LE，當字串收會在這一步就毀掉 |
+| `-f` | HTTP 錯誤時讓 curl 以非零結束，呼叫端才接得到 |
+| `-S` | 錯誤訊息留在 stderr，寫得進 log |
+| curl 走絕對路徑（`/usr/local/bin/curl`） | pm2 起的行程環境跟登入 shell 不一定一樣。兩個 jail 都在這個位置（已確認） |
+
+另外在 `restore()` 開機時檢查 curl 在不在，不在就記 ERROR——
+不檢查的話要等第一次排程才發現，而那時只看得到一行「抓取失敗」，不會知道是工具不見了。
+
+**Gemini 那邊維持用 Node 的 `fetch`**，Google 的 API 沒有這個問題，實測正常。
+
 ## 決策紀錄
 
 - 2026-11-04　**不用 Discord Webhook，用 `channel.send()`**。理由：bot 本來就在伺服器裡，webhook 等於多管一組密鑰，而且發出來的不是 bot 本人。
@@ -375,6 +429,9 @@ curl -sS -m 30 -A "Mozilla/5.0" -o /root/mc_bedrock.html -w "HTTP %{http_code}  
 - 2026-11-04　**提示詞放 `minecraftFeed.js`，`gemini.js` 只管呼叫**。理由：`gemini.js` 不認識業務，之後別的功能要用 Gemini 可以直接共用。
 - 2026-11-04　**`yarn.lock` 有進版控，但這個目錄不能跑 `yarn`**，所以該次 commit 只改了 `package.json`。jail 端 `update.sh` 會自己 `yarn install`，更新過的 `yarn.lock` 只在 jail 裡。
 - 2026-11-05　**14-8 完成**：測試 jail 裝好之後（`success Saved lockfile.`），從唯讀路徑把 jail 的 `yarn.lock` 複製回本目錄 commit，新增 `fast-xml-parser@5.12.0` 與它的相依 `@nodable/entities`，共 52 行。
+- 2026-11-05　**minecraft.net 的抓取改用 curl，不用 Node 的 `fetch`**。理由：四輪實測確認 Node 被 403 擋死而 curl 可以，補 header 無效，feed 與文章頁都一樣。改動只在 `fetchBytes()` 一個函式。
+- 2026-11-05　**否決 `javaPatchNotes.json`**。它的格式好很多，但 2024-02-07 之後就停更了，採用會變成「永遠沒有新文章」而且不報錯。
+- 2026-11-05　**否決「只做版本通知」（`version_manifest_v2.json`）**。使用者選 A：核心需求就是把內容搬回來讓大家就地討論，拿掉內容等於拿掉這個功能的意義。
 - 2026-11-05　~~「不補 `yarn.lock` 的話正式 jail `git pull` 會被本機修改擋住」~~ **這個理由是錯的**：正式站也有自己的 `update.sh`，用的是 `git reset --hard origin/main`，本機修改一律被丟棄，不會擋住更新。補 `yarn.lock` 的真正理由是**版本可重現**——不補的話兩個 jail 各自解析 `^5.12.0`，可能裝到不同的修補版，而且本機與 jail 的相依樹會長期對不起來。
 - 2026-11-04　**摘要失敗不算這篇失敗，內容有貼出去就寫 `seen`**。理由：不寫的話下一輪會重開討論串（重複搬運）。「任何失敗都不寫 `seen`」指的是抓 RSS、抓文章頁、貼到內容頻道這些步驟。
 - 2026-11-04　**文件勘誤**：測試 jail 的名稱是 `DiscordBot-Test`，repo 路徑是 `/root/BC_djs_bot_test`。CLAUDE.md 寫的是 `DiscordBot_test` 與 `/root/BC_djs_bot`，那個檔案不在本單元的檔案領域內，要不要改由使用者決定。

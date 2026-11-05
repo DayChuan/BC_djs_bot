@@ -3,11 +3,19 @@
 
 export const FEED_URL = 'https://www.minecraft.net/en-us/feeds/community-content/rss'
 
-//minecraft.net 對沒帶瀏覽器 UA 的請求會拖到逾時(U14 的 14-0，開發機兩次逾時)
 export const USER_AGENT = 'Mozilla/5.0'
 
 //抓 RSS 與文章頁的逾時
 export const FETCH_TIMEOUT_MS = 30 * 1000
+
+//**一律用 curl 抓 minecraft.net，不要用 Node 的 fetch**(2026-11-05 實測，見單元檔)。
+//同一台機器、同一個 UA、同一個網址：curl 回 200，Node fetch 回 403，而且可重現，
+//feed 與文章頁都一樣。補 Accept / Accept-Language / Sec-Fetch 也還是 403，
+//所以不是 header 的問題，是 Akamai 在看 TLS 與請求指紋，undici 跟 curl 天差地遠。
+//
+//寫絕對路徑而不是靠 PATH：pm2 起的行程環境跟登入 shell 不一定一樣。
+//兩個 jail 都是這個位置(2026-11-05 確認)。
+export const CURL_PATH = '/usr/local/bin/curl'
 
 //標題過濾，不分大小寫。只發 Java 版(使用者 2026-11-04 決定)。
 //排除優先：同時含收錄字與排除字的標題一律不收。
@@ -47,6 +55,7 @@ export const SUMMARY_MAX_CHARS = 1500
 export default {
     FEED_URL,
     USER_AGENT,
+    CURL_PATH,
     FETCH_TIMEOUT_MS,
     INCLUDE_KEYWORDS,
     EXCLUDE_KEYWORDS,

@@ -1,3 +1,5 @@
+import {execFile} from 'node:child_process'
+import fs from 'node:fs'
 import {XMLParser} from 'fast-xml-parser'
 import config from '@/config'
 import mc from '@/config/minecraft'
@@ -377,14 +379,40 @@ export const formatReport = (report) => {
 
 /////////////////////////// 抓取 ///////////////////////////
 
-const fetchBytes = async(url) => {
-    const res = await fetch(url, {
-        headers: {'User-Agent': mc.USER_AGENT},
-        signal: AbortSignal.timeout(mc.FETCH_TIMEOUT_MS),
-    })
-    if(!res.ok) throw new Error(`HTTP ${res.status}`)
-    return new Uint8Array(await res.arrayBuffer())
-}
+/**
+ * 用 curl 抓，不用 Node 的 fetch。
+ *
+ * 2026-11-05 在測試 jail 實測，同一台機器、同一個 UA、同一個網址：
+ *   curl -A "Mozilla/5.0"            → 200
+ *   node fetch 同一個 UA              → 403（feed 與文章頁都是）
+ *   node fetch ＋ 完整瀏覽器 header   → 403
+ * 可重現，不是暫時性的。minecraft.net 前面的 Akamai 看的是 TLS 與請求指紋，
+ * 那是 header 改不掉的東西，而 undici 跟 curl 的指紋天差地遠。
+ *
+ * 幾個參數的理由：
+ *   encoding: 'buffer'  feed 是 UTF-16LE，當字串收會在這一步就毀掉
+ *   -f                  HTTP 錯誤時讓 curl 以非零結束，才接得到
+ *   -S                  錯誤訊息留在 stderr，寫得進 log
+ *   -L                  跟著轉址
+ *   --max-time          curl 自己的逾時；execFile 的 timeout 再包一層，
+ *                       防的是 curl 卡在別的地方（例如 DNS）完全不回來
+ */
+const fetchBytes = (url) => new Promise((resolve, reject) => {
+    execFile(
+        mc.CURL_PATH,
+        ['-sSfL', '-A', mc.USER_AGENT, '--max-time', String(Math.ceil(mc.FETCH_TIMEOUT_MS / 1000)), url],
+        {encoding: 'buffer', timeout: mc.FETCH_TIMEOUT_MS + 5000, maxBuffer: 32 * 1024 * 1024},
+        (error, stdout, stderr) => {
+            if(error){
+                const detail = String(stderr || '').trim() || error.message
+                //curl 的 22 是「HTTP 回了 400 以上」，訊息裡會帶狀態碼
+                reject(new Error(`curl 失敗(exit ${error.code ?? '?'})：${detail}`))
+                return
+            }
+            resolve(new Uint8Array(stdout))
+        },
+    )
+})
 
 //失敗回 null，不往外拋
 const fetchFeed = async() => {
@@ -626,6 +654,15 @@ const check = async(client, trigger) => {
 
 //記憶體裡的排程在重啟時全部消失，所以每次開機都要重掛(同 dailyJapanese.js)
 const restore = async(client) => {
+    //開機就檢查 curl 在不在。不檢查的話要等第一次排程才發現，
+    //而那時只會看到一行「抓取失敗」，不會知道是工具不見了。
+    if(!fs.existsSync(mc.CURL_PATH)){
+        logger.error(
+            `Minecraft 更新通知：找不到 ${mc.CURL_PATH}，抓取一定會失敗。` +
+            '這個功能用 curl 而不是 Node 的 fetch，理由見 src/config/minecraft.js'
+        )
+    }
+
     scheduleCron(JOB_KEY, mc.CHECK_CRON, () => runCheck(client, 'cron'))
 }
 
