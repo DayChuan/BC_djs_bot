@@ -200,9 +200,14 @@ export const extractArticleBody = (html) => {
 //文章頁的正式標題。補發(/mc_check 只給網址)時沒有 RSS 的標題，只能從頁面拿。
 //用 og:title 而不是 <title>：<title> 後面會多一段「 | Minecraft」(2026-11-05 實測)。
 //兩個都找不到就回空字串，呼叫端退回用網址當標題。
+//⚠️ 用 new RegExp 配單引號字串，不要寫成 regex 字面值：
+//moduleLayout.test.js 的括號平衡掃描不是完整的 parser，看到 " 就當成字串開頭，
+//字面值裡的奇數個雙引號會讓它誤判「字串沒有結束」(2026-11-06 踩過)。
+const OG_TITLE = new RegExp('<meta[^>]*property="og:title"[^>]*content="([^"]*)"', 'i')
+
 export const extractArticleTitle = (html) => {
     const source = String(html || '')
-    const og = source.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i)
+    const og = source.match(OG_TITLE)
     if(og && og[1].trim()) return decodeEntities(og[1]).trim()
     const tag = source.match(/<title>([^<]*)<\/title>/i)
     if(tag) return decodeEntities(tag[1]).replace(/\s*\|\s*Minecraft\s*$/i, '').trim()
