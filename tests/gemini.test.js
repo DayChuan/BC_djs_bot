@@ -119,6 +119,18 @@ describe('generateText', () => {
         expect(result.model).toBe('model-c')
     })
 
+    it('有模型回 429 → 回報 quota，呼叫端才知道不能短間隔重試', async() => {
+        stubFetch((url) => (url.includes('model-a') ? reply(429, {}) : reply(503, {})))
+        const result = await gemini.generateText('hi', {models: MODELS, apiKey: 'k'})
+        expect(result).toMatchObject({text: null, reason: 'all-failed', quota: true})
+    })
+
+    it('全部是 503 → quota 是 false，這種可以重試', async() => {
+        stubFetch(() => reply(503, {}))
+        const result = await gemini.generateText('hi', {models: MODELS, apiKey: 'k'})
+        expect(result).toMatchObject({reason: 'all-failed', quota: false})
+    })
+
     it('403 → 直接放棄，不試其他模型', async() => {
         const calls = stubFetch(() => reply(403, {}))
         const result = await gemini.generateText('hi', {models: MODELS, apiKey: 'k'})

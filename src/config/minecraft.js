@@ -43,31 +43,45 @@ export const FALLBACK_MAX_MESSAGES = 8
 
 //Gemini 依序嘗試的模型。503/429/404/逾時就換下一個。換模型時只改這裡。
 //
-//⚠️ 排序的依據是「量能池要夠不一樣」，不是「版號由新到舊」。
-//2026-11-06 的事故：gemini-3.5-flash 與 gemini-3.6-flash **在 14 秒內接連回 503**，
-//相鄰版號顯然共用量能，排在一起的話第二棒形同虛設 —— 中文摘要就是這樣整條鏈走完還是失敗。
-//所以 3.6-flash 拿掉，改成跨世代(3.x → 2.x)再跨等級(flash → pro)。
+//⚠️⚠️ ListModels 會列出這把金鑰**實際上不能用**的模型。
+//2026-11-06 正式站實測：清單裡有 gemini-2.5-flash 與 gemini-2.5-pro，
+//真的去呼叫卻回 404「no longer available to new users」——
+//新辦的金鑰拿不到 2.5 系列。所以**挑模型不能只看清單，一定要真的打一次**。
+//我就是只看清單挑，才讓正式站的四棒裡死了兩棒。
 //
-//- 3.5-flash：實測最穩(snapshot 5、7 的中日文都是它一次過)
-//- 2.5-flash：隔一個世代，量能池明顯不同，這是整條鏈的重點
-//- 3.8-flash：最新最快，但實測失敗過兩次(11/04 回 503、11/06 逾時)，所以不排第一
-//- 2.5-pro：最後一棒。pro 的量能跟 flash 是分開的，慢但這時候有結果比快重要
+//排序依據是「量能池要夠不一樣」，不是「版號由新到舊」：
+//免費層的額度**各模型分開計算**，所以鏈越長、模型越不一樣，一天能用的總量就越多。
 //
-//不要放 -preview 結尾的(會無預警下架變成 404，備援會安靜地少一條)，
-//也不要放 *-latest 別名(Google 隨時換它指向誰，可能跟第一棒指到同一個)。
+//- 3.5-flash：品質最好也最穩(snapshot 5、7 的中日文都是它一次過)
+//- 3.5-flash-lite：2026-11-06 探測時唯一還回 200 的(883ms)。
+//  lite 的免費額度比 flash 寬，整理條列這種任務綽綽有餘，是真正能救火的那一棒
+//- 3.6-flash：活著(回 429 代表能用、只是當下額度滿了)
+//- 3.1-pro-preview：最後一棒。pro 的量能跟 flash 分開。
+//  **例外地放了 -preview**：這把金鑰能用的模型就這麼少，而下架後只是回 404 被跳過，
+//  代價很低；Google 自己的 404 訊息也是叫人改用它替代 2.5-pro。
 //
-//可用的清單以 API 為準，不要憑印象寫：
+//2026-11-06 探測後剔除的，不要再加回來：
+//  3.7-flash / 3.8-flash / 3.1-flash-lite → 呼叫會卡住不回應(20 秒以上)
+//  2.5-flash / 2.5-pro / 2.5-flash-lite   → 404，新金鑰用不了
+//  gemma-4-31b-it                          → 回 500
+//  *-latest 別名                            → Google 隨時換它指向誰，可能跟第一棒撞同一個
+//
+//要重新挑模型時，用「真的打一次」的探測，不要用 ListModels：
 //  node -e 'require("dotenv").config();
-//    fetch("https://generativelanguage.googleapis.com/v1beta/models",
-//      {headers:{"x-goog-api-key":process.env.GEMINI_API_KEY}})
-//     .then(r=>r.json()).then(j=>{for(const m of j.models||[])
-//       if((m.supportedGenerationMethods||[]).includes("generateContent"))
-//         console.log(m.name)})'
+//    const models=["模型A","模型B"];
+//    (async()=>{for(const m of models){const t=Date.now();
+//      try{const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`,
+//        {method:"POST",headers:{"x-goog-api-key":process.env.GEMINI_API_KEY,"Content-Type":"application/json"},
+//         body:JSON.stringify({contents:[{parts:[{text:"say ok"}]}]}),
+//         signal:AbortSignal.timeout(20000)});
+//        console.log(m,r.status,Date.now()-t+"ms")}
+//      catch(e){console.log(m,"逾時或錯誤",e.name)}}})()'
+//  200=可用｜429=可用但額度滿了(要留著)｜404=這把金鑰不能用｜逾時=剔除
 export const GEMINI_MODELS = [
     'gemini-3.5-flash',
-    'gemini-2.5-flash',
-    'gemini-3.8-flash',
-    'gemini-2.5-pro',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.1-pro-preview',
 ]
 
 //單一模型等多久放棄。

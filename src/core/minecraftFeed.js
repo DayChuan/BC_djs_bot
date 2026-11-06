@@ -543,7 +543,10 @@ const buildContentMessages = async(item, body) => {
     //2026-11-06：snapshot 6 的中文連吃 503、503、逾時，日文卻成功 ——
     //差別只在兩者隔了一分多鐘，剛好避開同一個尖峰。等一下再跑就是在複製那個運氣。
     //只重試一輪，而且只重試失敗的語言(成功的不能重跑，會換成另一份不同的摘要)。
-    const retry = LANGS.filter((lang) => !results[lang].text && results[lang].reason === WORTH_RETRY)
+    //⚠️ quota(429)的不重試：等 20 秒額度也不會回來，只會把剩下的燒更快。
+    //2026-11-06 正式站實測，兩輪重試共 16 次呼叫，額度就是這樣打完的。
+    const retry = LANGS.filter((lang) =>
+        !results[lang].text && results[lang].reason === WORTH_RETRY && !results[lang].quota)
     if(retry.length > 0 && mc.GEMINI_RETRY_DELAY_MS > 0){
         logger.warn(
             `Minecraft：「${item.title}」的 ${retry.join('、')} 摘要整條鏈都失敗，` +

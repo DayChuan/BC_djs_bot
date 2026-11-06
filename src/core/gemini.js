@@ -70,6 +70,13 @@ export const generateText = async(prompt, {models = [], timeoutMs = 90000, apiKe
         return {text: null, model: null, reason: 'bad-key'}
     }
 
+    //⚠️ 429 跟 503 都會換下一個模型，但意義完全不同：
+    //  503 是當下的尖峰，等幾十秒就過了
+    //  429 是這把金鑰的額度用完，等再久也一樣，要等到重置(免費層是每天)
+    //不分開的話，呼叫端會用短間隔一直重試，把剩下的額度燒得更快 ——
+    //2026-11-06 正式站就是這樣，兩輪重試共 16 次呼叫，把本來還能用的額度打完(U14)。
+    let quota = false
+
     for(const model of models){
         try{
             const res = await fetch(`${API_BASE}/${model}:generateContent`, {
@@ -90,13 +97,15 @@ export const generateText = async(prompt, {models = [], timeoutMs = 90000, apiKe
                 continue
             }
 
+            if(res.status === 429) quota = true
+
             const detail = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 200)
             const decision = classifyStatus(res.status)
             logger.warn(
                 `${label}：${model} HTTP ${res.status}，` +
                 `${decision === 'next' ? '換下一個模型' : '不再嘗試其他模型'}：${detail}`
             )
-            if(decision === 'abort') return {text: null, model: null, reason: `http-${res.status}`}
+            if(decision === 'abort') return {text: null, model: null, reason: `http-${res.status}`, quota}
         }
         catch(e){
             const why = e && e.name === 'TimeoutError' ? `逾時 ${timeoutMs}ms` : (e && e.message) || String(e)
@@ -104,8 +113,11 @@ export const generateText = async(prompt, {models = [], timeoutMs = 90000, apiKe
         }
     }
 
-    logger.warn(`${label}：所有模型都失敗(${models.join(' → ') || '清單是空的'})`)
-    return {text: null, model: null, reason: 'all-failed'}
+    logger.warn(
+        `${label}：所有模型都失敗(${models.join(' → ') || '清單是空的'})` +
+        (quota ? '，其中有模型回 429 額度用完，短時間內重試沒有意義' : '')
+    )
+    return {text: null, model: null, reason: 'all-failed', quota}
 }
 
 export default {

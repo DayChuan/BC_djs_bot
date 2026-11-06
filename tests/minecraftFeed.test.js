@@ -544,6 +544,17 @@ describe('runCheck', () => {
         expect(inThread.join('\n')).not.toContain('AI 摘要無法產生')
     })
 
+    it('額度用完(429) → 不做那輪 20 秒重試，免得把剩下的額度燒更快', async() => {
+        mcConfig.GEMINI_RETRY_DELAY_MS = 1
+        await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
+        const calls = stubNetwork({geminiStatus: 429})
+        await feed.runCheck(makeClient(), 'test')
+
+        //兩種語言各跑一次完整的鏈就停，不會有第二輪
+        expect(calls.filter((url) => url.includes('generativelanguage')))
+            .toHaveLength(mcConfig.GEMINI_MODELS.length * 2)
+    })
+
     it('金鑰無效 → 不重試(重試一百次也一樣)，每種語言只打一次就放棄', async() => {
         mcConfig.GEMINI_RETRY_DELAY_MS = 1
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
