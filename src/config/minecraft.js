@@ -93,12 +93,15 @@ export const GEMINI_TIMEOUT_MS = 45 * 1000
 //取代原本的「等 20 秒當場再跑一輪」(GEMINI_RETRY_DELAY_MS，已拿掉)。
 //
 //多久掃一次佇列。工作自己的 nextAt 到了才會跑，這裡只是檢查頻率。
-//⚠️ U16 驗收用的暫時設定(原值 '*/30 * * * *'、30 分鐘、5 次)，驗完要 revert
-export const QUEUE_CRON = '*/2 * * * *'
+export const QUEUE_CRON = '*/30 * * * *'
 //一般失敗(503／逾時)後多久再試
-export const QUEUE_RETRY_MS = 2 * 60 * 1000
+export const QUEUE_RETRY_MS = 30 * 60 * 1000
+//判斷「到期」時的緩衝：nextAt <= 現在 + 這個值就算到期。
+//nextAt 是「失敗那一刻 + QUEUE_RETRY_MS」，而失敗那一刻總比 cron 觸發晚幾百毫秒，
+//不給緩衝的話每次都會落在下一輪觸發的「稍後」，實際間隔變成兩倍(2026-11-06 驗收實測：設 2 分鐘、跑出 4 分鐘)。
+export const QUEUE_DUE_GRACE_MS = 60 * 1000
 //失敗幾次(含第一次)就放棄並通知管理員
-export const QUEUE_MAX_ATTEMPTS = 30
+export const QUEUE_MAX_ATTEMPTS = 5
 //額度用完(429)時排到「隔天」幾點(台灣時間)。
 //額度實際上是太平洋時間午夜重置(約台灣 16:00)，但使用者要的是隔天再試，不精算(單元檔 U16)。
 export const QUEUE_QUOTA_RETRY_HOUR = 9
@@ -123,6 +126,7 @@ export default {
     GEMINI_TIMEOUT_MS,
     QUEUE_CRON,
     QUEUE_RETRY_MS,
+    QUEUE_DUE_GRACE_MS,
     QUEUE_MAX_ATTEMPTS,
     QUEUE_QUOTA_RETRY_HOUR,
     SUMMARY_MAX_CHARS,

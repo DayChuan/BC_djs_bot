@@ -279,7 +279,8 @@ export const runQueue = async(client) => {
     }
     running = true
     try{
-        const due = dueJobs(await getJobs(), Date.now())
+        //多給一點緩衝，理由見 config/minecraft.js 的 QUEUE_DUE_GRACE_MS
+        const due = dueJobs(await getJobs(), Date.now() + mc.QUEUE_DUE_GRACE_MS)
         if(due.length === 0) return counts
         logger.info(`Gemini 佇列：${due.length} 筆到期`)
         for(const job of due){

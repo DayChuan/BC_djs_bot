@@ -214,6 +214,17 @@ describe('runQueue', () => {
         expect(await queue.getJobs()).toHaveLength(1)
     })
 
+    it('差幾秒才到期的也算到期：不然每次都落在下一輪觸發之後，實際間隔變兩倍', async() => {
+        const run = vi.fn(async() => ({ok: true}))
+        queue.registerKind('almost', {run})
+        const job = queue.buildJob(dueSpec('almost'), {reason: 'all-failed'}, Date.now())
+        await queue.saveJob({...job, nextAt: Date.now() + 30 * 1000})
+
+        await queue.runQueue(makeClient())
+        expect(run).toHaveBeenCalledTimes(1)
+        expect(await queue.getJobs()).toEqual([])
+    })
+
     it('all-failed → 次數加 1，留在佇列', async() => {
         queue.registerKind('flaky', {run: async() => ({ok: false, result: {reason: 'all-failed'}})})
         await enqueueDue('flaky')

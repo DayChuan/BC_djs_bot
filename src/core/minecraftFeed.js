@@ -560,8 +560,10 @@ const buildContentMessages = async(item, body) => {
 
     const pending = LANGS.filter((lang) => !results[lang].text && isRetryable(results[lang]))
 
+    //都失敗、而且沒有任何一種會由佇列補上(金鑰失效、沒設金鑰)才退回貼原文。
+    //會補上的話只貼「稍後自動補上」：標題那則已經附原文連結，再貼最多 8 則原文只是洗版(使用者 2026-11-06 決定)。
     const succeeded = LANGS.filter((lang) => results[lang].text)
-    if(succeeded.length === 0){
+    if(succeeded.length === 0 && pending.length === 0){
         logger.warn(`Minecraft：「${item.title}」兩種摘要都失敗，退回貼原文(最多 ${mc.FALLBACK_MAX_MESSAGES} 則)`)
         return {messages: buildFallbackMessages(body, item.link), pending, results}
     }

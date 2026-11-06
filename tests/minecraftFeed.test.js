@@ -516,7 +516,7 @@ describe('runCheck', () => {
         expect((await state.getState(feed.SECTION)).seen).toEqual([SNAPSHOT_6, SNAPSHOT_7])
     })
 
-    it('Gemini 全部失敗 → 退回貼原文，這篇仍然算處理完', async() => {
+    it('兩種語言整條鏈都失敗 → 不貼原文，只貼兩行「稍後補上」並排進佇列，這篇仍然算處理完', async() => {
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
         stubNetwork({geminiStatus: 503})
         const client = makeClient()
@@ -524,11 +524,16 @@ describe('runCheck', () => {
 
         expect(report.posted).toHaveLength(1)
         const inThread = client.sent.filter((m) => m.channel === 'thread-1').map((m) => m.content)
-        expect(inThread[1]).toContain('AI 摘要無法產生')
-        expect(inThread.join('\n')).toContain('Added Calcite Blockset')
+        //標題(含原文連結)＋中日各一行佔位，原文不貼(使用者 2026-11-06 決定)
+        expect(inThread).toHaveLength(3)
+        expect(inThread[0]).toContain(SNAPSHOT_7)
+        expect(inThread[1]).toContain('稍後自動補上')
+        expect(inThread[2]).toContain('後ほど自動で追加されます')
+        expect(inThread.join('\n')).not.toContain('AI 摘要無法產生')
+        expect(inThread.join('\n')).not.toContain('Added Calcite Blockset')
         expect((await state.getState(feed.SECTION)).seen).toContain(SNAPSHOT_7)
 
-        //退回貼原文的同時，兩種語言都排進佇列，補上時貼回這個討論串(U16)
+        //兩種語言都排進佇列，補上時貼回這個討論串(U16)
         const jobs = await queue.getJobs()
         expect(jobs.map((job) => job.id).sort()).toEqual([`summary:${SNAPSHOT_7}:ja`, `summary:${SNAPSHOT_7}:zh`])
         for(const job of jobs) expect(job.channelId).toBe('thread-1')
@@ -583,6 +588,11 @@ describe('runCheck', () => {
 
         expect(calls.filter((url) => url.includes('generativelanguage'))).toHaveLength(2)
         expect(await queue.getJobs()).toEqual([])
+
+        //不會有摘要補上，所以照舊退回貼原文
+        const inThread = client.sent.filter((m) => m.channel === 'thread-1').map((m) => m.content)
+        expect(inThread[1]).toContain('AI 摘要無法產生')
+        expect(inThread.join('\n')).toContain('Added Calcite Blockset')
 
         const notices = client.sent.filter((m) => m.channel === config.channels.admin)
         expect(notices).toHaveLength(1)
