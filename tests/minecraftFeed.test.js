@@ -323,6 +323,14 @@ describe('訊息組裝', () => {
         expect(feed.buildSummaryMessages('zh', '- 新增方解石')[0]).toBe('**【中文摘要】**\n- 新增方解石')
     })
 
+    it('有給模型就在摘要最後標註是哪個模型整理的，沒給就不標', () => {
+        const withModel = feed.buildSummaryMessages('zh', '- 新增方解石', 'gemini-3.5-flash')
+        expect(withModel[withModel.length - 1]).toContain('-# 🤖 由 Gemini（gemini-3.5-flash）整理')
+        expect(feed.buildSummaryMessages('zh', '- 新增方解石').join('')).not.toContain('-#')
+        //失敗那條路沒有模型可標，不能印出「由 Gemini（null）整理」
+        expect(feed.buildSummaryMessages('zh', null, 'gemini-3.5-flash').join('')).not.toContain('-#')
+    })
+
     it('日文摘要前面有分界線，中文沒有', () => {
         expect(feed.buildSummaryMessages('ja', '- 追加')[0].startsWith('━')).toBe(true)
         expect(feed.buildSummaryMessages('zh', '- 新增')[0].startsWith('━')).toBe(false)

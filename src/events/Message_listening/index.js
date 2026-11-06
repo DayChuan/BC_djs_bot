@@ -1,4 +1,5 @@
 import {Events, GatewayIntentBits } from 'discord.js'
+import config from '@/config'
 import logger from '@/core/logger'
 
 export const event = {
@@ -14,6 +15,9 @@ export const action = async(message) => {
     // console.log(message.author.bot);
     //如果訊息是機器人，則不進行任何動作
     if(message.author.bot) return;
+
+    //公告性質的頻道不插話(U16)。清單在 config/environments/*.js 的 noKeywordReply。
+    if((config.noKeywordReply || []).includes(message.channelId)) return;
 
     if(message.content.includes('sip')){
         await message.channel.send('sip sip');

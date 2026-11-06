@@ -351,6 +351,9 @@ const SUMMARY_LANGS = {
     zh: {
         heading: '**【中文摘要】**',
         failed: '（中文摘要產生失敗，請看原文）',
+        //讓大家知道這段是 AI 整理的，以及是哪個模型整理的。
+        //-# 開頭是 Discord 的小字(subtext)，灰色且字級較小，不會跟摘要內容搶版面。
+        credit: (model) => `-# 🤖 由 Gemini（${model}）整理`,
         prompt: (title, body, max) =>
             `以下是 Minecraft Java 版官方更新文章「${title}」的內容。請用繁體中文（台灣用語）整理重點摘要：\n` +
             '- 條列式，先列最重要的新內容與改動\n' +
@@ -365,6 +368,7 @@ const SUMMARY_LANGS = {
         divider: '━━━━━━━━━━━━━━━━',
         heading: '**【日本語要約】**',
         failed: '（日本語の要約を生成できませんでした。原文をご覧ください）',
+        credit: (model) => `-# 🤖 Gemini（${model}）による要約`,
         prompt: (title, body, max) =>
             `以下は Minecraft Java 版の公式アップデート記事「${title}」の本文です。日本語で要点をまとめてください：\n` +
             '- 箇条書きで、最も重要な新要素と変更点から順に\n' +
@@ -383,11 +387,14 @@ export const buildSummaryPrompt = (lang, title, body, max = mc.SUMMARY_MAX_CHARS
     SUMMARY_LANGS[lang].prompt(title, body, max)
 
 //一種語言的摘要 → 訊息陣列。摘要失敗(text 是 null)就是一行失敗說明。
-export const buildSummaryMessages = (lang, text, max = mc.MESSAGE_MAX) => {
-    const {divider, heading, failed} = SUMMARY_LANGS[lang]
+//model 是實際產出這段文字的模型名稱，會附在最後一行；沒給就不附
+//(失敗的那條路本來就沒有模型可標)。
+export const buildSummaryMessages = (lang, text, model = null, max = mc.MESSAGE_MAX) => {
+    const {divider, heading, failed, credit} = SUMMARY_LANGS[lang]
     //分界線只加在這一段的第一則；摘要太長被切成多則時後面幾則不重複畫線
     const head = divider ? `${divider}\n${heading}` : heading
-    return splitMessage(`${head}\n${text || failed}`, max)
+    const body = text ? (model ? `${text}\n${credit(model)}` : text) : failed
+    return splitMessage(`${head}\n${body}`, max)
 }
 
 //討論串的第一則：標題與原文連結
@@ -559,7 +566,7 @@ const buildContentMessages = async(item, body) => {
         `Minecraft：「${item.title}」摘要 ` +
         LANGS.map((lang) => `${lang}=${results[lang].model || '失敗'}`).join(' ')
     )
-    return LANGS.flatMap((lang) => buildSummaryMessages(lang, results[lang].text))
+    return LANGS.flatMap((lang) => buildSummaryMessages(lang, results[lang].text, results[lang].model))
 }
 
 //回傳 {ok, url, title}。ok = 內容至少貼出了第一則(標題那則)，這篇就算處理完、可以寫 seen。
