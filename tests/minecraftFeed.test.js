@@ -38,7 +38,10 @@ const SNAPSHOT_7 = 'https://www.minecraft.net/en-us/article/minecraft-26-4-snaps
 const SNAPSHOT_6 = 'https://www.minecraft.net/en-us/article/minecraft-26-4-snapshot-6'
 
 //照實際文章頁的結構縮小：內文區塊之後還有分享列與頁尾的文章列表(同樣的 class)
-const ARTICLE_HTML = `<html><body>
+const ARTICLE_HTML = `<html><head>
+<title>Minecraft 26.4 Snapshot 7 | Minecraft</title>
+<meta property="og:title" content="Minecraft 26.4 Snapshot 7">
+</head><body>
 <div class="MC_articleHeroA_category">News</div>
 <div class="article-section"><div class="article-text">
     <div class="MC_articleGridA_sectionRef"></div>
@@ -309,9 +312,48 @@ describe('訊息組裝', () => {
         }
     })
 
+    it('日文摘要要求只用日文正式名稱，不附英文原名；中文維持附英文', () => {
+        expect(feed.buildSummaryPrompt('ja', 'Snapshot 7', 'BODY')).toContain('英語の原名を括弧で添えない')
+        expect(feed.buildSummaryPrompt('zh', 'Snapshot 7', 'BODY')).toContain('括號附上英文原名')
+    })
+
     it('摘要失敗的語言換成一行失敗說明', () => {
         expect(feed.buildSummaryMessages('ja', null)[0]).toContain('要約を生成できませんでした')
         expect(feed.buildSummaryMessages('zh', '- 新增方解石')[0]).toBe('**【中文摘要】**\n- 新增方解石')
+    })
+
+    it('日文摘要前面有分界線，中文沒有', () => {
+        expect(feed.buildSummaryMessages('ja', '- 追加')[0].startsWith('━')).toBe(true)
+        expect(feed.buildSummaryMessages('zh', '- 新增')[0].startsWith('━')).toBe(false)
+    })
+
+    it('分界線只畫在日文第一則，被切開的後續訊息不重複畫', () => {
+        const messages = feed.buildSummaryMessages('ja', 'あ'.repeat(5000), 2000)
+        expect(messages.length).toBeGreaterThan(1)
+        expect(messages.slice(1).some((text) => text.startsWith('━'))).toBe(false)
+    })
+
+    it('文章標題優先取 og:title，退而求其次用 <title> 並去掉站名', () => {
+        const og = '<meta property="og:title" content="Minecraft 26.4 Snapshot 7">'
+        expect(feed.extractArticleTitle(`<title>X | Minecraft</title>${og}`)).toBe('Minecraft 26.4 Snapshot 7')
+        expect(feed.extractArticleTitle('<title>Minecraft 26.4 Snapshot 5 | Minecraft</title>'))
+            .toBe('Minecraft 26.4 Snapshot 5')
+        expect(feed.extractArticleTitle('<html></html>')).toBe('')
+    })
+
+    it('補發網址：空白與逗號都能分隔，去重，且只收 minecraft.net 的文章頁', () => {
+        const base = 'https://www.minecraft.net/en-us/article/minecraft-26-4-snapshot-'
+        const {links, rejected} = feed.parseUrlList(`${base}5 ${base}6,${base}5`)
+        expect(links).toEqual([`${base}5`, `${base}6`])
+        expect(rejected).toEqual([])
+    })
+
+    it('補發網址：站外網址與文章頁以外的路徑都要被擋下來', () => {
+        const {links, rejected} = feed.parseUrlList(
+            'https://evil.example.com/a https://www.minecraft.net/en-us/article/'
+        )
+        expect(links).toEqual([])
+        expect(rejected).toHaveLength(2)
     })
 
     it('退回原文：最多 8 則，超過時最後一則附原文連結，每則不超過 2000', () => {
@@ -372,13 +414,37 @@ const response = (body, status = 200) => ({
     text: async() => Buffer.from(body).toString('utf8'),
 })
 
-//RSS 用 UTF-16LE 回(跟實際一樣)，文章頁回 HTML，Gemini 依 geminiStatus 回應
-const stubNetwork = ({geminiStatus = 200} = {}) => {
+//minecraft.net 是用 curl 抓的，不是 Node 的 fetch(見 src/config/minecraft.js)，
+//所以 RSS 與文章頁一定要攔 execFile。
+//
+//⚠️ 2026-11-05 的教訓：curl 那次改版只換了程式沒換測試，stubGlobal('fetch') 攔不到 curl，
+//結果整組 runCheck 測試偷偷連上真的 minecraft.net，靠線上內容「碰巧」通過了兩天，
+//直到 snapshot 6 掉出線上 feed 才爆出來。攔不到的網路呼叫不會報錯，只會讓測試說謊。
+const curl = vi.hoisted(() => ({handler: null}))
+
+vi.mock('node:child_process', () => ({
+    execFile: (file, args, options, callback) => {
+        const url = args[args.length - 1]
+        if(!curl.handler) return callback(new Error(`沒有設定 curl handler：${url}`), Buffer.alloc(0), '')
+        curl.handler(url, callback)
+    },
+}))
+
+//RSS 用 UTF-16LE 回(跟實際一樣)，文章頁回 HTML，Gemini 依 geminiStatus 回應。
+//回傳的 calls 兩種管道都記，讓「不該呼叫 Gemini」這類斷言照舊成立。
+const stubNetwork = ({geminiStatus = 200, curlFails = false} = {}) => {
     const calls = []
+
+    curl.handler = (url, callback) => {
+        calls.push(url)
+        if(curlFails) return callback(new Error('network down'), Buffer.alloc(0), '')
+        if(url.includes('/feeds/')) return callback(null, Buffer.from(FEED_XML, 'utf16le'), '')
+        if(url.includes('/article/')) return callback(null, Buffer.from(ARTICLE_HTML, 'utf8'), '')
+        callback(new Error(`unexpected curl ${url}`), Buffer.alloc(0), '')
+    }
+
     vi.stubGlobal('fetch', vi.fn(async(url) => {
         calls.push(url)
-        if(url.includes('/feeds/')) return response(Buffer.from(FEED_XML, 'utf16le'))
-        if(url.includes('/article/')) return response(Buffer.from(ARTICLE_HTML, 'utf8'))
         if(url.includes('generativelanguage')){
             const json = geminiStatus === 200
                 ? {candidates: [{content: {parts: [{text: '- 摘要內容', thoughtSignature: 'xxx'}]}}]}
@@ -397,6 +463,8 @@ describe('runCheck', () => {
 
     afterEach(() => {
         delete process.env.GEMINI_API_KEY
+        //忘了 stubNetwork 的測試要當場炸掉，不要沿用上一條的 handler 安靜地跑過去
+        curl.handler = null
     })
 
     it('首次執行：什麼都不發，只記住收錄的網址', async() => {
@@ -457,13 +525,38 @@ describe('runCheck', () => {
 
     it('RSS 抓取失敗 → seen 不動', async() => {
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
-        vi.stubGlobal('fetch', vi.fn(async() => {
-            throw new Error('network down')
-        }))
+        stubNetwork({curlFails: true})
         const report = await feed.runCheck(makeClient(), 'test')
 
         expect(report.message).toContain('RSS 抓取失敗')
         expect(await state.getState(feed.SECTION)).toEqual({initialized: true, seen: [SNAPSHOT_6]})
+    })
+
+    it('指定網址補發：跳過 RSS、照給的順序發、標題取自文章頁、寫進 seen', async() => {
+        await state.setState(feed.SECTION, {initialized: true, seen: []})
+        const calls = stubNetwork()
+        const client = makeClient()
+        const report = await feed.runCheck(client, 'test', [SNAPSHOT_6, SNAPSHOT_7])
+
+        //完全不碰 feed
+        expect(calls.some((url) => url.includes('/feeds/'))).toBe(false)
+        //標題是文章頁的 og:title，不是從網址猜的
+        expect(report.posted).toEqual(['Minecraft 26.4 Snapshot 7', 'Minecraft 26.4 Snapshot 7'])
+        expect((await state.getState(feed.SECTION)).seen).toEqual([SNAPSHOT_6, SNAPSHOT_7])
+    })
+
+    it('補發時某一篇抓不到 → 只有那篇不寫 seen，其他照發', async() => {
+        await state.setState(feed.SECTION, {initialized: true, seen: []})
+        stubNetwork()
+        const good = curl.handler
+        curl.handler = (url, callback) => (url === SNAPSHOT_6
+            ? callback(new Error('404'), Buffer.alloc(0), '')
+            : good(url, callback))
+
+        const report = await feed.runCheck(makeClient(), 'test', [SNAPSHOT_6, SNAPSHOT_7])
+
+        expect(report.failed).toEqual([SNAPSHOT_6])
+        expect((await state.getState(feed.SECTION)).seen).toEqual([SNAPSHOT_7])
     })
 
     it('已經全部看過 → 沒有新文章，也不呼叫 Gemini', async() => {

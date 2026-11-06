@@ -197,6 +197,40 @@ export const extractArticleBody = (html) => {
     return end > start ? source.slice(start + 1, end) : ''
 }
 
+//文章頁的正式標題。補發(/mc_check 只給網址)時沒有 RSS 的標題，只能從頁面拿。
+//用 og:title 而不是 <title>：<title> 後面會多一段「 | Minecraft」(2026-11-05 實測)。
+//兩個都找不到就回空字串，呼叫端退回用網址當標題。
+export const extractArticleTitle = (html) => {
+    const source = String(html || '')
+    const og = source.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i)
+    if(og && og[1].trim()) return decodeEntities(og[1]).trim()
+    const tag = source.match(/<title>([^<]*)<\/title>/i)
+    if(tag) return decodeEntities(tag[1]).replace(/\s*\|\s*Minecraft\s*$/i, '').trim()
+    return ''
+}
+
+//文章網址的開頭。補發只收這個前綴底下的網址。
+const ARTICLE_PREFIX = 'https://www.minecraft.net/en-us/article/'
+
+//使用者輸入的一串網址 → {links, rejected}，用空白或逗號分隔，重複的只留一個。
+//
+//⚠️ 一定要擋前綴：這個參數會叫機器人去抓網址、把內容整包貼進頻道。
+//不擋的話等於給了一個「把任意網站的內容搬進伺服器」的工具，
+//指令雖然限管理員，但這種放大能力不該留著。
+export const parseUrlList = (text) => {
+    const links = []
+    const rejected = []
+    for(const piece of String(text || '').split(/[\s,]+/)){
+        const url = piece.trim()
+        if(!url) continue
+        if(url.startsWith(ARTICLE_PREFIX) && url.length > ARTICLE_PREFIX.length){
+            if(!links.includes(url)) links.push(url)
+        }
+        else rejected.push(url)
+    }
+    return {links, rejected}
+}
+
 const stripTags = (html) => String(html).replace(/<[^>]*>/g, '')
 
 //轉成 Discord 能讀的純文字：標題轉 ##、清單依巢狀層級縮排、實體解碼。
@@ -321,12 +355,17 @@ const SUMMARY_LANGS = {
             `---\n${body}`,
     },
     ja: {
+        //中日之間要有明確的分界線(2026-11-05 使用者要求)。
+        //⚠️ Discord 不把 --- 當成水平線，會原樣印出三個減號，所以用實心線字元自己畫。
+        divider: '━━━━━━━━━━━━━━━━',
         heading: '**【日本語要約】**',
         failed: '（日本語の要約を生成できませんでした。原文をご覧ください）',
         prompt: (title, body, max) =>
             `以下は Minecraft Java 版の公式アップデート記事「${title}」の本文です。日本語で要点をまとめてください：\n` +
             '- 箇条書きで、最も重要な新要素と変更点から順に\n' +
-            '- ブロック・モブ・アイテムなどの名前は日本語の後に括弧で英語の原名を付ける\n' +
+            //日文讀者不需要英文對照，夾在中間反而難讀(2026-11-05 使用者要求)。
+            //中文那邊維持附英文原名，兩邊的需求不一樣，不要一起改。
+            '- ブロック・モブ・アイテムなどの名前は日本語の正式名称のみを使い、英語の原名を括弧で添えない\n' +
             `- 全体で ${max} 文字以内\n` +
             '- 要約だけを出力し、前置きや締めの言葉は書かない\n\n' +
             `---\n${body}`,
@@ -340,8 +379,10 @@ export const buildSummaryPrompt = (lang, title, body, max = mc.SUMMARY_MAX_CHARS
 
 //一種語言的摘要 → 訊息陣列。摘要失敗(text 是 null)就是一行失敗說明。
 export const buildSummaryMessages = (lang, text, max = mc.MESSAGE_MAX) => {
-    const {heading, failed} = SUMMARY_LANGS[lang]
-    return splitMessage(`${heading}\n${text || failed}`, max)
+    const {divider, heading, failed} = SUMMARY_LANGS[lang]
+    //分界線只加在這一段的第一則；摘要太長被切成多則時後面幾則不重複畫線
+    const head = divider ? `${divider}\n${heading}` : heading
+    return splitMessage(`${head}\n${text || failed}`, max)
 }
 
 //討論串的第一則：標題與原文連結
@@ -428,19 +469,21 @@ const fetchFeed = async() => {
     }
 }
 
-const fetchArticleText = async(link) => {
+//回傳 {title, body}。抓不到或找不到內文區塊 → body 是空字串，呼叫端當作失敗。
+//標題一併抽出來，因為補發時呼叫端只有網址、沒有標題。
+const fetchArticle = async(link) => {
     try{
         const {text: html} = decodeBytes(await fetchBytes(link))
         const body = extractArticleBody(html)
         if(!body){
             logger.warn(`Minecraft 文章頁找不到內文區塊(網站可能改版)：${link}`)
-            return ''
+            return {title: '', body: ''}
         }
-        return htmlToText(body)
+        return {title: extractArticleTitle(html), body: htmlToText(body)}
     }
     catch(e){
         logger.warn(`Minecraft 文章頁抓取失敗：${link}：${e && e.message}`)
-        return ''
+        return {title: '', body: ''}
     }
 }
 
@@ -488,15 +531,19 @@ const buildContentMessages = async(item, body) => {
     return LANGS.flatMap((lang) => buildSummaryMessages(lang, results[lang].text))
 }
 
-//回傳 {ok, url}。ok = 內容至少貼出了第一則(標題那則)，這篇就算處理完、可以寫 seen。
+//回傳 {ok, url, title}。ok = 內容至少貼出了第一則(標題那則)，這篇就算處理完、可以寫 seen。
+//title 回傳是給呼叫端用的：補發時標題要抓了文章頁才知道，通知那則也要用同一個。
 const postArticle = async(client, item) => {
-    const body = await fetchArticleText(item.link)
+    const {title: pageTitle, body} = await fetchArticle(item.link)
     if(!body) return {ok: false}
 
     const parent = await fetchChannel(client, config.channels.minecraftContent, '更新內容頻道')
     if(!parent) return {ok: false}
 
-    const messages = [buildHeaderMessage(item), ...await buildContentMessages(item, body)]
+    //RSS 來的本來就有標題；補發只給網址，就用文章頁的 og:title。
+    //兩個都沒有的話退回用網址，至少貼出去的東西看得出是哪一篇。
+    const article = {...item, title: item.title || pageTitle || item.link}
+    const messages = [buildHeaderMessage(article), ...await buildContentMessages(article, body)]
 
     let target = parent
     let thread = null
@@ -511,11 +558,11 @@ const postArticle = async(client, item) => {
     else if(typeof (parent.threads && parent.threads.create) === 'function'){
         try{
             thread = await parent.threads.create({
-                name: buildThreadName(item.title),
+                name: buildThreadName(article.title),
                 //上限 7 天
                 autoArchiveDuration: 10080,
                 type: PUBLIC_THREAD,
-                reason: `Minecraft 更新：${item.title}`,
+                reason: `Minecraft 更新：${article.title}`,
             })
             //刻意不鎖定：這個功能的目的就是讓大家在串裡討論(同 pollService.openPollThread)
             target = thread
@@ -534,7 +581,7 @@ const postArticle = async(client, item) => {
         first = await sendText(target, messages[0])
     }
     catch(e){
-        logger.warn(`Minecraft：「${item.title}」第一則貼不出去，這篇不算處理完：${e && e.message}`)
+        logger.warn(`Minecraft：「${article.title}」第一則貼不出去，這篇不算處理完：${e && e.message}`)
         //留著空的討論串的話，下一輪重試會再開一個
         if(thread) await thread.delete().catch(() => undefined)
         return {ok: false}
@@ -546,12 +593,12 @@ const postArticle = async(client, item) => {
         }
         catch(e){
             //第一則已經出去了，這篇算處理完；重來的話會重複開討論串
-            logger.warn(`Minecraft：「${item.title}」有一則貼不出去(已略過)：${e && e.message}`)
+            logger.warn(`Minecraft：「${article.title}」有一則貼不出去(已略過)：${e && e.message}`)
         }
     }
 
-    logger.info(`Minecraft：「${item.title}」已貼出 ${messages.length} 則到 ${thread ? '討論串' : '更新內容頻道'}`)
-    return {ok: true, url: thread ? thread.url : first.url}
+    logger.info(`Minecraft：「${article.title}」已貼出 ${messages.length} 則到 ${thread ? '討論串' : '更新內容頻道'}`)
+    return {ok: true, url: thread ? thread.url : first.url, title: article.title}
 }
 
 //通知失敗只記 log：內容已經搬過去了，不能因為通知失敗重搬一次
@@ -577,14 +624,15 @@ const postNotice = async(client, item, url) => {
 let running = false
 
 //回傳 report 給 /mc_check 顯示。不往外拋錯(排程那端也有 runSafely，但這裡自己先接住)。
-export const runCheck = async(client, trigger = 'cron') => {
+//links 有東西時跳過 RSS，直接補發那幾篇(見 backfill)。
+export const runCheck = async(client, trigger = 'cron', links = []) => {
     if(running){
         logger.warn(`Minecraft 檢查(${trigger})：上一次還沒跑完，這次略過`)
         return {message: '上一次檢查還沒跑完，這次略過。'}
     }
     running = true
     try{
-        return await check(client, trigger)
+        return await check(client, trigger, Array.isArray(links) ? links : [])
     }
     catch(e){
         logger.error(`Minecraft 檢查(${trigger})失敗：`, e)
@@ -595,11 +643,54 @@ export const runCheck = async(client, trigger = 'cron') => {
     }
 }
 
-const check = async(client, trigger) => {
+//逐篇貼文。排程與補發共用，差別只在「要貼哪幾篇」是誰算出來的。
+//⚠️ seen 一篇寫一次，不要等全部跑完才一起寫：中途失敗的話，
+//已經貼出去的那幾篇下一輪會再貼一次。
+const postAll = async(client, items) => {
+    const posted = []
+    const failed = []
+    for(const [index, item] of items.entries()){
+        if(index > 0) await sleep(mc.POST_INTERVAL_MS)
+
+        const result = await postArticle(client, item)
+        if(!result.ok){
+            //不寫 seen：寫了的話這篇就永遠不會補發
+            failed.push(item.title || item.link)
+            continue
+        }
+
+        await updateState(SECTION, (current) => {
+            current.initialized = true
+            current.seen = addSeen(current.seen, [item.link])
+        })
+        posted.push(result.title)
+        await postNotice(client, {...item, title: result.title}, result.url)
+    }
+    return {posted, failed}
+}
+
+//指定網址補發：完全跳過 RSS。
+//
+//RSS 只留最新 10 篇而且是全品項混在一起，Java 的更新常常一兩天就被擠掉
+//(2026-11-05：snapshot 5、6 都已經不在 feed 裡了)。所以「想補發舊文章」
+//這件事不可能從 feed 這條路解決，只能讓使用者直接指定網址。
+//
+//這裡不套 INCLUDE_KEYWORDS / EXCLUDE_KEYWORDS：那是用來從混雜的 feed 裡挑出 Java 的，
+//而使用者明確指定網址就代表他要那一篇，再過濾只會讓人以為指令壞了。
+const backfill = async(client, trigger, links) => {
+    logger.info(`Minecraft 補發(${trigger})：指定 ${links.length} 篇：${links.join('｜')}`)
+    //標題留空，postArticle 會用文章頁的 og:title 補上
+    const {posted, failed} = await postAll(client, links.map((link) => ({link, title: ''})))
+    return {posted, failed, message: `補發 ${posted.length} 篇，失敗 ${failed.length} 篇。`}
+}
+
+const check = async(client, trigger, links) => {
     if(!config.channels.minecraftContent){
         logger.warn(`環境「${config.name}」沒有設定 channels.minecraftContent，Minecraft 更新通知不啟用`)
         return {message: '沒有設定更新內容頻道，功能未啟用。'}
     }
+
+    if(links.length > 0) return await backfill(client, trigger, links)
 
     const xml = await fetchFeed()
     if(xml === null) return {message: 'RSS 抓取失敗，請看 log。'}
@@ -634,26 +725,7 @@ const check = async(client, trigger) => {
         (plan.toPost.length ? `：${plan.toPost.map((item) => item.title).join('｜')}` : '')
     )
 
-    const posted = []
-    const failed = []
-    for(const [index, item] of plan.toPost.entries()){
-        if(index > 0) await sleep(mc.POST_INTERVAL_MS)
-
-        const result = await postArticle(client, item)
-        if(!result.ok){
-            //不寫 seen：寫了的話這篇就永遠不會補發
-            failed.push(item.title)
-            continue
-        }
-
-        //一篇寫一次，後面某篇失敗不會連累前面已經貼出去的
-        await updateState(SECTION, (current) => {
-            current.initialized = true
-            current.seen = addSeen(current.seen, [item.link])
-        })
-        posted.push(item.title)
-        await postNotice(client, item, result.url)
-    }
+    const {posted, failed} = await postAll(client, plan.toPost)
 
     const message = plan.toPost.length === 0
         ? '沒有新文章。'
@@ -689,6 +761,8 @@ export default {
     planPosts,
     addSeen,
     extractArticleBody,
+    extractArticleTitle,
+    parseUrlList,
     htmlToText,
     splitMessage,
     buildThreadName,
