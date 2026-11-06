@@ -1,7 +1,7 @@
 # U16　公告自動翻日文 ＋ Gemini 失敗佇列
 
 狀態：進行中
-進度：7/9（程式與 jail 測試完成，剩兩站驗收）
+進度：8/9（測試站驗收完成，剩正式站）
 依賴：U03（`state.js`，已完成）、U14（`gemini.js` / `minecraftFeed.js`，已完成）
 可平行：**不可**。會動到 `minecraftFeed.js` 的貼文流程，跟其他要改那支檔案的單元會衝突
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -278,7 +278,7 @@ export const event = {name: Events.MessageCreate}
 - [x] 16-5　佇列執行器（兩種 kind）＋ 測試；翻譯失敗接上佇列與 ⏳
 - [x] 16-6　`minecraftFeed.js` 接上佇列，拿掉 `GEMINI_RETRY_DELAY_MS`
 - [x] 16-7　`yarn test` 全過（在測試 jail 跑，不要在 NAS 目錄跑）（2026-11-06：23 檔 809 個全過）
-- [ ] 16-8　測試站實機驗收
+- [x] 16-8　測試站實機驗收（驗收 1～6 通過；4b 金鑰失效未實機驗，使用者決定先上線，只有單元測試守著）
 - [ ] 16-9　正式站驗收
 
 ---
@@ -405,7 +405,10 @@ id 寫死成 `summary:<link>:<lang>`、`translate:<messageId>`，同一個 id �
 - 第 2 輪(上限 30)：公告與 `/mc_check` 補發共排入 3 筆；`pm2 restart` 後 15:46 三筆 attempts 1 → 2，
   佇列有落地且重啟後接著跑
 - 從 Windows 經 SMB 讀 jail 的 log 會讀到舊內容(檔案大小變了、內容沒變)，`data/state.json` 讀得到最新的
-- 第 3 輪(模型改回)：16:02 中日摘要補進同一個討論串、16:04 公告譯文補上，佇列清空
+- 第 3 輪(模型改回)：16:02 中日摘要補進同一個討論串、16:04 公告譯文補上並拿掉 ⏳，佇列清空
+- 第 4 輪(金鑰失效 → 管理員通知)：**未做**，使用者決定今天先上線。行為由單元測試守著
+  (`noticeTranslate.test.js`、`minecraftFeed.test.js`、`geminiQueue.test.js` 的金鑰案例)，之後換金鑰時順便實機確認
+- 驗收用的暫時設定(`60c5602`、`59a238a`、`4cca8f1`)已在 `6df0824` 全部還原，對 `b23140b` 的 diff 只剩新增的 `QUEUE_DUE_GRACE_MS`
 
 ### 2026-11-06　到期判斷加 1 分鐘緩衝(驗收第 3 輪抓到的漏洞)
 
