@@ -512,15 +512,41 @@ const fetchChannel = async(client, id, label) => {
 //只送純文字，不解析任何提及(文章或摘要裡出現 @everyone 也不能真的 tag 到人)
 const sendText = (target, content) => target.send({content, allowedMentions: {parse: []}})
 
+//只有「整條鏈都試過還是不行」才值得等一下重來。
+//core/gemini.js 的 classifyStatus 已經把 429/503/404/逾時歸成「換下一個模型」，
+//所以暫時性的失敗最後一定收斂成 all-failed；
+//no-key / bad-key / http-401 這種金鑰問題則是重試一百次也一樣，不能等。
+const WORTH_RETRY = 'all-failed'
+
+//跑一次整條模型鏈
+const summarize = (item, body, lang) => generateText(buildSummaryPrompt(lang, item.title, body), {
+    models: mc.GEMINI_MODELS,
+    timeoutMs: mc.GEMINI_TIMEOUT_MS,
+    label: `Gemini[${lang}] ${item.title}`,
+})
+
 //兩種語言各自呼叫、各自判斷；都失敗或沒有 key → 退回貼原文
 const buildContentMessages = async(item, body) => {
     const results = {}
     for(const lang of LANGS){
-        results[lang] = await generateText(buildSummaryPrompt(lang, item.title, body), {
-            models: mc.GEMINI_MODELS,
-            timeoutMs: mc.GEMINI_TIMEOUT_MS,
-            label: `Gemini[${lang}] ${item.title}`,
-        })
+        results[lang] = await summarize(item, body, lang)
+    }
+
+    //整條鏈都被尖峰擋掉時再等一輪。
+    //2026-11-06：snapshot 6 的中文連吃 503、503、逾時，日文卻成功 ——
+    //差別只在兩者隔了一分多鐘，剛好避開同一個尖峰。等一下再跑就是在複製那個運氣。
+    //只重試一輪，而且只重試失敗的語言(成功的不能重跑，會換成另一份不同的摘要)。
+    const retry = LANGS.filter((lang) => !results[lang].text && results[lang].reason === WORTH_RETRY)
+    if(retry.length > 0 && mc.GEMINI_RETRY_DELAY_MS > 0){
+        logger.warn(
+            `Minecraft：「${item.title}」的 ${retry.join('、')} 摘要整條鏈都失敗，` +
+            `等 ${Math.round(mc.GEMINI_RETRY_DELAY_MS / 1000)} 秒後再試一輪`
+        )
+        await sleep(mc.GEMINI_RETRY_DELAY_MS)
+        for(const lang of retry){
+            results[lang] = await summarize(item, body, lang)
+            if(results[lang].text) logger.info(`Minecraft：「${item.title}」的 ${lang} 摘要第二輪成功`)
+        }
     }
 
     const succeeded = LANGS.filter((lang) => results[lang].text)

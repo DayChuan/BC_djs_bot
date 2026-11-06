@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import * as feed from '@/core/minecraftFeed'
+import mcConfig from '@/config/minecraft'
 import * as state from '@/core/state'
 import config from '@/config'
 import production from '@/config/environments/production'
@@ -431,9 +432,11 @@ vi.mock('node:child_process', () => ({
 }))
 
 //RSS 用 UTF-16LE 回(跟實際一樣)，文章頁回 HTML，Gemini 依 geminiStatus 回應。
+//geminiFailFirst：前 n 次 Gemini 呼叫一律回 503，用來測「第一輪全失敗、第二輪成功」。
 //回傳的 calls 兩種管道都記，讓「不該呼叫 Gemini」這類斷言照舊成立。
-const stubNetwork = ({geminiStatus = 200, curlFails = false} = {}) => {
+const stubNetwork = ({geminiStatus = 200, geminiFailFirst = 0, curlFails = false} = {}) => {
     const calls = []
+    let geminiCalls = 0
 
     curl.handler = (url, callback) => {
         calls.push(url)
@@ -446,10 +449,12 @@ const stubNetwork = ({geminiStatus = 200, curlFails = false} = {}) => {
     vi.stubGlobal('fetch', vi.fn(async(url) => {
         calls.push(url)
         if(url.includes('generativelanguage')){
-            const json = geminiStatus === 200
+            geminiCalls += 1
+            const status = geminiCalls <= geminiFailFirst ? 503 : geminiStatus
+            const json = status === 200
                 ? {candidates: [{content: {parts: [{text: '- 摘要內容', thoughtSignature: 'xxx'}]}}]}
-                : {error: {code: geminiStatus}}
-            return response(Buffer.from(JSON.stringify(json), 'utf8'), geminiStatus)
+                : {error: {code: status}}
+            return response(Buffer.from(JSON.stringify(json), 'utf8'), status)
         }
         throw new Error(`unexpected fetch ${url}`)
     }))
@@ -457,12 +462,18 @@ const stubNetwork = ({geminiStatus = 200, curlFails = false} = {}) => {
 }
 
 describe('runCheck', () => {
+    const RETRY_DELAY = mcConfig.GEMINI_RETRY_DELAY_MS
+
     beforeEach(() => {
         process.env.GEMINI_API_KEY = 'test-key'
+        //正式值是 20 秒，照跑的話整個 vitest 會多等 20 秒。
+        //要測重試的那條自己把它設回一個很小的值。
+        mcConfig.GEMINI_RETRY_DELAY_MS = 0
     })
 
     afterEach(() => {
         delete process.env.GEMINI_API_KEY
+        mcConfig.GEMINI_RETRY_DELAY_MS = RETRY_DELAY
         //忘了 stubNetwork 的測試要當場炸掉，不要沿用上一條的 handler 安靜地跑過去
         curl.handler = null
     })
@@ -509,6 +520,30 @@ describe('runCheck', () => {
         expect(inThread[1]).toContain('AI 摘要無法產生')
         expect(inThread.join('\n')).toContain('Added Calcite Blockset')
         expect((await state.getState(feed.SECTION)).seen).toContain(SNAPSHOT_7)
+    })
+
+    it('整條模型鏈都被尖峰擋掉 → 等一下再跑一輪，第二輪成功就用第二輪的結果', async() => {
+        mcConfig.GEMINI_RETRY_DELAY_MS = 1
+        await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
+        //中日各跑完一整條鏈都失敗，之後才放行
+        stubNetwork({geminiFailFirst: mcConfig.GEMINI_MODELS.length * 2})
+        const client = makeClient()
+        const report = await feed.runCheck(client, 'test')
+
+        expect(report.posted).toHaveLength(1)
+        const inThread = client.sent.filter((m) => m.channel === 'thread-1').map((m) => m.content)
+        expect(inThread[1]).toContain('【中文摘要】')
+        expect(inThread.join('\n')).not.toContain('AI 摘要無法產生')
+    })
+
+    it('金鑰無效 → 不重試(重試一百次也一樣)，每種語言只打一次就放棄', async() => {
+        mcConfig.GEMINI_RETRY_DELAY_MS = 1
+        await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
+        const calls = stubNetwork({geminiStatus: 401})
+        await feed.runCheck(makeClient(), 'test')
+
+        //401 直接放棄整條鏈，也不會進第二輪：兩種語言各一次
+        expect(calls.filter((url) => url.includes('generativelanguage'))).toHaveLength(2)
     })
 
     it('更新內容頻道不存在 → 不崩潰、seen 沒有被寫入', async() => {
