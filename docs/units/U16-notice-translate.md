@@ -1,7 +1,7 @@
 # U16　公告自動翻日文 ＋ Gemini 失敗佇列
 
-狀態：未開始
-進度：0/9
+狀態：進行中
+進度：1/9
 依賴：U03（`state.js`，已完成）、U14（`gemini.js` / `minecraftFeed.js`，已完成）
 可平行：**不可**。會動到 `minecraftFeed.js` 的貼文流程，跟其他要改那支檔案的單元會衝突
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -270,7 +270,7 @@ export const event = {name: Events.MessageCreate}
 
 ## 進度
 
-- [ ] 16-1　`noticeTranslate.js` 提示詞與純函式 ＋ 測試
+- [x] 16-1　`noticeTranslate.js` 提示詞與純函式 ＋ 測試（待 16-7 在 jail 跑過才算驗證）
 - [ ] 16-2　`events/noticeTranslate/` 監聽（含 `author.bot` 擋線）
 - [ ] 16-3　`geminiQueue.js` 的純函式（下次時間、管理員通知文字）＋ 測試
 - [ ] 16-4　佇列的落地與 `registerRestore`
@@ -312,6 +312,17 @@ export const event = {name: Events.MessageCreate}
 
 免費層的額度是**每天**重置的。30 分鐘後重試不但不會成功，還會多消耗一次呼叫 ——
 而額度本來就是各模型分開計算的，多打一次就少一次救命的機會。
+
+### 2026-11-06　16-1：「要不要翻」也做成純函式
+
+`shouldTranslate({bot, channelId, content}, noticeChannelId)` 把 bot 擋線、頻道比對、空內容判斷收在一起，
+這樣最危險的那條規則(`author.bot`)有單元測試守著。事件檔的 `action` 第一行仍然照寫
+`if(message.author.bot) return`，兩層都擋；16-2 會再加一條靜態檢查確認那行沒被挪走。
+環境沒設 `manualNotice` 時一律不翻。
+
+譯文標註分兩種：當下翻好的是 `-# 🤖 AI 翻訳（Gemini 模型）`，
+佇列補上的是 `-# ⏳ 後から追加された AI 翻訳（…）`。讀者是日本成員，所以補上的標示也寫日文；
+不分開的話，補上的那則看起來會像重複貼。
 
 ### 2026-11-06　為什麼翻譯用回覆而不是另開頻道
 
