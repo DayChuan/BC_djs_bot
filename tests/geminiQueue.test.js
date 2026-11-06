@@ -125,6 +125,24 @@ describe('工作的建立與失敗紀錄', () => {
         expect(text).toContain('最後錯誤：all-failed（429 額度用完）')
         expect(text).toContain('首次失敗：2026-11-06 10:25')
     })
+
+    it('金鑰問題的通知：含項目、網址、錯誤，並提示去查 .env', () => {
+        const text = queue.buildKeyFailureNotice({label: '公告翻譯：明天維修', url: 'https://discord.com/x'}, {reason: 'http-400'})
+        expect(text).toContain('金鑰或請求有問題，不會自動重試')
+        expect(text).toContain('項目：公告翻譯：明天維修')
+        expect(text).toContain('網址：https://discord.com/x')
+        expect(text).toContain('錯誤：http-400')
+        expect(text).toContain('GEMINI_API_KEY')
+    })
+
+    it.each([
+        ['http-400', true],
+        ['bad-key', true],
+        ['no-key', false],
+        ['all-failed', false],
+    ])('%s → 要不要發金鑰通知：%s', (reason, expected) => {
+        expect(queue.needsKeyFailureNotice({text: null, reason})).toBe(expected)
+    })
 })
 
 /////////////////////////// 落地與執行(假的 client) ///////////////////////////
@@ -232,7 +250,7 @@ describe('runQueue', () => {
         expect(notice.content).toContain('429 額度用完')
     })
 
-    it('重試時變成金鑰錯誤 → 移出佇列、不通知管理員(記 ERROR)', async() => {
+    it('重試時變成金鑰錯誤 → 移出佇列、發金鑰問題的管理員通知', async() => {
         const onGiveUp = vi.fn(async() => undefined)
         queue.registerKind('key', {run: async() => ({ok: false, result: {reason: 'http-400'}}), onGiveUp})
         await enqueueDue('key')
@@ -240,8 +258,20 @@ describe('runQueue', () => {
 
         expect((await queue.runQueue(client)).dropped).toBe(1)
         expect(await queue.getJobs()).toEqual([])
-        expect(client.sent).toEqual([])
+        expect(client.sent).toHaveLength(1)
+        expect(client.sent[0].channel).toBe(config.channels.admin)
+        expect(client.sent[0].content).toContain('金鑰或請求有問題')
+        expect(client.sent[0].content).toContain('L-key')
         expect(onGiveUp).toHaveBeenCalledTimes(1)
+    })
+
+    it('重試時變成 no-key(環境拿掉了金鑰)→ 移出佇列，不通知', async() => {
+        queue.registerKind('nokey', {run: async() => ({ok: false, result: {reason: 'no-key'}})})
+        await enqueueDue('nokey')
+        const client = makeClient()
+
+        expect((await queue.runQueue(client)).dropped).toBe(1)
+        expect(client.sent).toEqual([])
     })
 
     it('drop → 安靜地移出佇列', async() => {

@@ -2,7 +2,7 @@ import config from '@/config'
 import mc from '@/config/minecraft'
 import {generateText} from '@/core/gemini'
 import {splitMessage} from '@/core/minecraftFeed'
-import {enqueue, registerKind, isRetryable, jobId} from '@/core/geminiQueue'
+import {enqueue, registerKind, isRetryable, jobId, notifyKeyFailure} from '@/core/geminiQueue'
 import logger from '@/core/logger'
 
 //公告自動翻日文(U16)：判斷要不要翻、提示詞、訊息組裝，以及翻譯流程與佇列處理器。
@@ -104,11 +104,9 @@ export const translateMessage = async(message) => {
     }
 
     if(!isRetryable(result)){
-        //金鑰或請求有問題，重試一百次也一樣，要人去修(使用者 2026-11-06 決定不排佇列)。
-        //no-key 是該環境刻意沒設金鑰，gemini.js 已經記過 warn。
-        if(result.reason !== 'no-key'){
-            logger.error(`公告翻譯失敗，金鑰或請求有問題(${result.reason})，不會自動重試：message=${message.id}`)
-        }
+        //金鑰或請求有問題，重試一百次也一樣，要人去修：不排佇列，直接通知管理員(使用者 2026-11-06 決定)。
+        //no-key 是該環境刻意沒設金鑰，gemini.js 已經記過 warn，不通知。
+        await notifyKeyFailure(message.client, {label: buildJobLabel(message.content), url: message.url}, result)
         return 'failed'
     }
 

@@ -124,6 +124,8 @@ const makeMessage = ({content = '明天晚上八點維修', channelId = config.c
         replies: [],
         reacted: [],
         unreacted: [],
+        //client 在其他頻道(管理員頻道)送出的訊息
+        sent: [],
         reply: async(options) => {
             message.replies.push(options)
             return {}
@@ -138,9 +140,15 @@ const makeMessage = ({content = '明天晚上八點維修', channelId = config.c
     message.client = {
         user: {id: 'bot'},
         channels: {
-            fetch: async() => {
+            fetch: async(id) => {
                 if(gone) throw Object.assign(new Error('Unknown Message'), {code: 10008})
-                return {messages: {fetch: async() => message}}
+                return {
+                    messages: {fetch: async() => message},
+                    send: async({content}) => {
+                        message.sent.push({channel: id, content})
+                        return {}
+                    },
+                }
             },
         },
     }
@@ -214,12 +222,27 @@ describe('translateMessage', () => {
         })
     })
 
-    it('金鑰錯誤(400) → 不排佇列、不加 ⏳(使用者決定：金鑰失效不排)', async() => {
+    it('金鑰錯誤(400) → 不排佇列、不加 ⏳，直接通知管理員(使用者決定)', async() => {
         stubGemini(400)
         const message = makeMessage()
         expect(await notice.translateMessage(message)).toBe('failed')
         expect(message.reacted).toEqual([])
         expect(await queue.getJobs()).toEqual([])
+
+        expect(message.sent).toHaveLength(1)
+        expect(message.sent[0].channel).toBe(config.channels.admin)
+        expect(message.sent[0].content).toContain('金鑰或請求有問題')
+        expect(message.sent[0].content).toContain('公告翻譯：明天晚上八點維修')
+        expect(message.sent[0].content).toContain(message.url)
+    })
+
+    it('沒設金鑰(no-key) → 不通知', async() => {
+        delete process.env.GEMINI_API_KEY
+        const calls = stubGemini(200)
+        const message = makeMessage()
+        expect(await notice.translateMessage(message)).toBe('failed')
+        expect(calls.count).toBe(0)
+        expect(message.sent).toEqual([])
     })
 
     it('佇列補上 → 回覆標明是稍後補上的譯文，拿掉 ⏳，移出佇列', async() => {

@@ -575,13 +575,20 @@ describe('runCheck', () => {
         }
     })
 
-    it('金鑰無效 → 每種語言只打一次就放棄，也不排佇列', async() => {
+    it('金鑰無效 → 每種語言只打一次就放棄、不排佇列，兩種語言併成一則管理員通知', async() => {
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
         const calls = stubNetwork({geminiStatus: 401})
-        await feed.runCheck(makeClient(), 'test')
+        const client = makeClient()
+        await feed.runCheck(client, 'test')
 
         expect(calls.filter((url) => url.includes('generativelanguage'))).toHaveLength(2)
         expect(await queue.getJobs()).toEqual([])
+
+        const notices = client.sent.filter((m) => m.channel === config.channels.admin)
+        expect(notices).toHaveLength(1)
+        expect(notices[0].content).toContain('金鑰或請求有問題')
+        expect(notices[0].content).toContain('Minecraft 26.4 Snapshot 7（中文摘要、日文摘要）')
+        expect(notices[0].content).toContain('錯誤：http-401')
     })
 
     it('佇列補上日文摘要 → 貼回原本的討論串，開頭標明是稍後補上的，移出佇列', async() => {

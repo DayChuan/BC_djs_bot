@@ -109,6 +109,20 @@ export const buildAdminNotice = (job) => [
     `首次失敗：${formatTime(job.createdAt)}`,
 ].join('\n')
 
+//金鑰或請求有問題(不排佇列)時的通知。
+//logger.error 不會送到管理員頻道(2026-11-06 驗收時確認)，不另外發的話沒有人會知道。
+export const buildKeyFailureNotice = ({label, url}, result) => [
+    '⚠️ Gemini 金鑰或請求有問題，不會自動重試',
+    '',
+    `項目：${label}`,
+    `網址：${url || '（無）'}`,
+    `錯誤：${describeError(result)}`,
+    '請確認 jail 的 .env 裡 GEMINI_API_KEY 是否有效',
+].join('\n')
+
+//no-key 是該環境刻意沒設金鑰，不算要通知的失敗
+export const needsKeyFailureNotice = (result) => isKeyFailure(result) && result.reason !== 'no-key'
+
 /////////////////////////// 落地 ///////////////////////////
 
 //updateState 是排隊執行的，mutator 裡只做同步的陣列操作。
@@ -150,11 +164,11 @@ export const registerKind = (kind, handler) => {
 //Discord 的 send 一律不解析提及
 const sendText = (target, content) => target.send({content, allowedMentions: {parse: []}})
 
-const notifyAdmin = async(client, job) => {
-    const text = buildAdminNotice(job)
+//發到管理員頻道。貼不出去只記 log，不往外拋(呼叫端多半在排程或事件裡)。
+const notifyAdmin = async(client, text) => {
     const id = config.channels && config.channels.admin
     if(!id){
-        logger.error(`Gemini 佇列：環境「${config.name}」沒有設定 channels.admin，通知改記 log：\n${text}`)
+        logger.error(`Gemini：環境「${config.name}」沒有設定 channels.admin，通知改記 log：\n${text}`)
         return
     }
     try{
@@ -162,8 +176,16 @@ const notifyAdmin = async(client, job) => {
         await sendText(channel, text)
     }
     catch(e){
-        logger.error(`Gemini 佇列：管理員通知貼不出去(${job.id})：\n${text}`, e)
+        logger.error(`Gemini：管理員通知貼不出去：\n${text}`, e)
     }
+}
+
+//金鑰或請求有問題時由各功能呼叫(也用在佇列重試時才變成金鑰錯誤的情況)。
+//spec 只需要 {label, url}。no-key 不通知。
+export const notifyKeyFailure = async(client, spec, result) => {
+    if(!needsKeyFailureNotice(result)) return
+    logger.error(`Gemini：${spec.label} 失敗(${describeError(result)})，金鑰或請求有問題，不會自動重試`)
+    await notifyAdmin(client, buildKeyFailureNotice(spec, result))
 }
 
 const callGiveUp = async(client, job) => {
@@ -179,7 +201,7 @@ const callGiveUp = async(client, job) => {
 
 const giveUp = async(client, job) => {
     logger.error(`Gemini 佇列：${job.label} 失敗 ${job.attempts} 次(${job.lastError})，放棄並通知管理員`)
-    await notifyAdmin(client, job)
+    await notifyAdmin(client, buildAdminNotice(job))
     await callGiveUp(client, job)
 }
 
@@ -228,7 +250,8 @@ const runJob = async(client, job) => {
     const result = (outcome && outcome.result) || {reason: 'unknown'}
     if(!isRetryable(result)){
         await removeJob(job.id)
-        logger.error(`Gemini 佇列：${job.label} 失敗(${describeError(result)})，金鑰或請求有問題，不再重試`)
+        logger.warn(`Gemini 佇列：${job.label} 重試時變成金鑰或請求錯誤，移出佇列`)
+        await notifyKeyFailure(client, job, result)
         await callGiveUp(client, job)
         return 'dropped'
     }
@@ -295,6 +318,9 @@ export default {
     upsertJob,
     dueJobs,
     buildAdminNotice,
+    buildKeyFailureNotice,
+    needsKeyFailureNotice,
+    notifyKeyFailure,
     getJobs,
     saveJob,
     replaceJob,

@@ -6,7 +6,7 @@ import mc from '@/config/minecraft'
 import {generateText} from '@/core/gemini'
 import {scheduleCron} from '@/core/scheduler'
 import {getState, updateState, registerRestore} from '@/core/state'
-import {enqueue, registerKind, isRetryable, jobId} from '@/core/geminiQueue'
+import {enqueue, registerKind, isRetryable, jobId, needsKeyFailureNotice, notifyKeyFailure} from '@/core/geminiQueue'
 import logger from '@/core/logger'
 
 //Minecraft Java 版更新通知(U14)。
@@ -576,7 +576,7 @@ const buildContentMessages = async(item, body) => {
     return {messages, pending, results}
 }
 
-//失敗的語言排進 Gemini 佇列，補上時貼回 targetId(討論串或頻道)。
+//失敗的語言排進 Gemini 佇列，補上時貼回 targetId(討論串或頻道)；金鑰類的失敗改發管理員通知。
 //排不進去只記 log：文章已經貼出去了，不能因為這個讓整篇算失敗、下一輪重貼。
 const enqueueSummaries = async(client, article, targetId, pending, results) => {
     for(const lang of pending){
@@ -593,6 +593,14 @@ const enqueueSummaries = async(client, article, targetId, pending, results) => {
         catch(e){
             logger.error(`Minecraft：「${article.title}」的 ${lang} 摘要排不進佇列：`, e)
         }
+    }
+
+    //金鑰或請求有問題的語言不排佇列，直接通知管理員(使用者 2026-11-06 決定)。
+    //兩種語言通常是同一把金鑰一起壞，併成一則，不要一篇文章洗兩則。
+    const keyFailed = LANGS.filter((lang) => !results[lang].text && needsKeyFailureNotice(results[lang]))
+    if(keyFailed.length > 0){
+        const names = keyFailed.map((lang) => SUMMARY_LANGS[lang].name).join('、')
+        await notifyKeyFailure(client, {label: `${article.title}（${names}）`, url: article.link}, results[keyFailed[0]])
     }
 }
 
