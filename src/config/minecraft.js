@@ -96,7 +96,7 @@ export const QUEUE_CRON = '*/2 * * * *'
 //一般失敗(503／逾時)後多久再試
 export const QUEUE_RETRY_MS = 2 * 60 * 1000
 //失敗幾次(含第一次)就放棄並通知管理員
-export const QUEUE_MAX_ATTEMPTS = 2
+export const QUEUE_MAX_ATTEMPTS = 30
 //額度用完(429)時排到「隔天」幾點(台灣時間)。
 //額度實際上是太平洋時間午夜重置(約台灣 16:00)，但使用者要的是隔天再試，不精算(單元檔 U16)。
 export const QUEUE_QUOTA_RETRY_HOUR = 9
