@@ -77,9 +77,11 @@ export const FALLBACK_MAX_MESSAGES = 8
 //        console.log(m,r.status,Date.now()-t+"ms")}
 //      catch(e){console.log(m,"逾時或錯誤",e.name)}}})()'
 //  200=可用｜429=可用但額度滿了(要留著)｜404=這把金鑰不能用｜逾時=剔除
-//⚠️ U16 驗收用的暫時設定，驗完要 revert
 export const GEMINI_MODELS = [
-    'gemini-nonexistent',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-3.1-pro-preview',
 ]
 
 //單一模型等多久放棄。
