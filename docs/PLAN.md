@@ -29,6 +29,7 @@
 | [U13](./units/U13-dynamic-voice.md) | 動態語音頻道（Join-to-Create） | **可開工** | 0/9 | U03（已完成） | 可（會動 voiceStateUpdate） |
 | [U14](./units/U14-minecraft-feed.md) | Minecraft 更新通知（搬進討論串） | **可開工** | 0/8 | U03（已完成） | 可 |
 | [U15](./units/U15-maplestory-news.md) | 楓之谷更新公告搬運 | 缺資訊 | 0/8 | U14 | 不可與 U14 平行 |
+| [U16](./units/U16-notice-translate.md) | 公告自動翻日文 ＋ Gemini 失敗佇列 | **可開工** | 0/9 | U03、U14（皆已完成） | **不可**，會動 `minecraftFeed.js` |
 
 已完成的單元收在 [units/done.md](./units/done.md)，平常不需要讀。
 
