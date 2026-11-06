@@ -1,4 +1,6 @@
 import {describe, it, expect, vi} from 'vitest'
+import fs from 'node:fs'
+import {fileURLToPath} from 'node:url'
 import * as notice from '@/core/noticeTranslate'
 
 //真正的 logger 會開檔與串流，在測試 jail 裡會讓 vitest 卡住跑不完(同 minecraftFeed.test.js)
@@ -38,6 +40,21 @@ describe('shouldTranslate', () => {
         ['undefined', undefined],
     ])('%s → 不翻', (label, content) => {
         expect(notice.shouldTranslate({...base, content}, CHANNEL)).toBe(false)
+    })
+})
+
+//事件檔有 import discord.js，不能 import 進來測(測試 jail 會卡住)，所以只讀原始碼文字。
+//守的是「action 的第一個敘述就是 bot 擋線」：有人在前面插了會 await 或會送訊息的東西，
+//機器人就可能翻自己的譯文，無限迴圈灌爆頻道。
+describe('事件檔的 bot 擋線', () => {
+    it('action 的第一個敘述是 if(message.author.bot) return', () => {
+        const file = fileURLToPath(new URL('../src/events/noticeTranslate/index.js', import.meta.url))
+        const source = fs.readFileSync(file, 'utf8')
+        const start = source.indexOf('export const action')
+        expect(start).toBeGreaterThanOrEqual(0)
+        const body = source.slice(source.indexOf('{', start) + 1)
+        const firstLine = body.split('\n').map((line) => line.trim()).find((line) => line.length > 0)
+        expect(firstLine).toBe('if(message.author.bot) return')
     })
 })
 

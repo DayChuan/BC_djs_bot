@@ -1,7 +1,7 @@
 # U16　公告自動翻日文 ＋ Gemini 失敗佇列
 
 狀態：進行中
-進度：1/9
+進度：2/9
 依賴：U03（`state.js`，已完成）、U14（`gemini.js` / `minecraftFeed.js`，已完成）
 可平行：**不可**。會動到 `minecraftFeed.js` 的貼文流程，跟其他要改那支檔案的單元會衝突
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -242,6 +242,7 @@ export const event = {name: Events.MessageCreate}
 | `src/core/minecraftFeed.js` | 上面那四點 |
 | `src/config/minecraft.js` | 拿掉 `GEMINI_RETRY_DELAY_MS`，加佇列的常數 |
 | `src/core/state.js` | 不用改，直接用 `getState`/`updateState` 開新區段 |
+| `tests/minecraftFeed.test.js` | 拿掉重試延遲相關的兩條，改驗佇列（2026-11-06 使用者同意） |
 
 ### 要新增的
 
@@ -271,7 +272,7 @@ export const event = {name: Events.MessageCreate}
 ## 進度
 
 - [x] 16-1　`noticeTranslate.js` 提示詞與純函式 ＋ 測試（待 16-7 在 jail 跑過才算驗證）
-- [ ] 16-2　`events/noticeTranslate/` 監聽（含 `author.bot` 擋線）
+- [x] 16-2　`events/noticeTranslate/` 監聽（含 `author.bot` 擋線）；失敗時目前只記 log，16-5 接上佇列與 ⏳
 - [ ] 16-3　`geminiQueue.js` 的純函式（下次時間、管理員通知文字）＋ 測試
 - [ ] 16-4　佇列的落地與 `registerRestore`
 - [ ] 16-5　佇列執行器（兩種 kind）＋ 測試
@@ -287,8 +288,10 @@ export const event = {name: Events.MessageCreate}
 1. 在測試站的 `1568104599863435264` 發一則中文公告 → 機器人回覆日文，附 AI 標註
 2. 機器人自己發的訊息**不會**被再翻一次（確認沒有無限迴圈）
 3. 該頻道不會出現「確かに」之類的關鍵字回覆
-4. 把 `.env` 的 `GEMINI_API_KEY` 暫時改錯 → 翻譯失敗，原訊息出現 ⏳，佇列裡有工作
-5. 改回正確金鑰 → 30 分鐘後（或手動觸發）自動補上譯文，⏳ 消失
+4. 把 `config/minecraft.js` 的 `GEMINI_MODELS` 暫時換成不存在的模型（例：`['gemini-nonexistent']`）
+   → 回 404、整條鏈 `all-failed` → 翻譯失敗，原訊息出現 ⏳，佇列裡有工作
+5. 改回正確的模型清單 → 30 分鐘後自動補上譯文，⏳ 消失
+4b. 把 `.env` 的 `GEMINI_API_KEY` 暫時改錯 → **不**出現 ⏳、佇列是空的、log 有 ERROR（金鑰失效不排佇列）
 6. 把重試上限暫時改成 1 → 失敗後管理員頻道收到通知，內容含項目／網址／錯誤
 7. `yarn test` 全過
 
@@ -323,6 +326,28 @@ export const event = {name: Events.MessageCreate}
 譯文標註分兩種：當下翻好的是 `-# 🤖 AI 翻訳（Gemini 模型）`，
 佇列補上的是 `-# ⏳ 後から追加された AI 翻訳（…）`。讀者是日本成員，所以補上的標示也寫日文；
 不分開的話，補上的那則看起來會像重複貼。
+
+### 2026-11-06　只有 all-failed 進佇列，金鑰失效不排(使用者決定)
+
+`generateText()` 的失敗分三類：
+- `all-failed`(503／逾時／429 都換過一輪模型)→ 進佇列，摘要與翻譯一致
+- `bad-key`、`http-400/401/403` 這類放棄整條鏈的 → **不排**，記 `logger.error`。
+  重試一百次也一樣，排進去只會在 5 次後才叫人，不如當下就記 ERROR。
+  (依 `channels.admin` 的註解「管理員看到的 ERROR」推測 logger.error 會送到管理員頻道，未讀 logger.js 確認)
+- `no-key` → 該環境刻意沒設金鑰，不排也不記 ERROR(gemini.js 已記 warn)
+
+因此原本的驗收第 4 步(改錯金鑰觸發佇列)不成立，改成用不存在的模型名稱製造 `all-failed`，
+改錯金鑰的情境另列為 4b，驗的是「不排佇列」。
+
+### 2026-11-06　16-2：回覆時 repliedUser: false
+
+`message.reply()` 預設會 ping 被回覆的人。公告者每發一則就被機器人 ping 一次沒有意義，
+所以 `allowedMentions: {parse: [], repliedUser: false}`。譯文超過 2000 字被切段時，每段都用 reply，
+讓每一則都連得回原公告。
+
+### 2026-11-06　檔案領域追加 `tests/minecraftFeed.test.js`(使用者同意)
+
+16-6 拿掉 `GEMINI_RETRY_DELAY_MS` 後，該檔「第二輪成功」與「429 不做 20 秒重試」兩條會失效，要改寫成驗佇列。
 
 ### 2026-11-06　為什麼翻譯用回覆而不是另開頻道
 
