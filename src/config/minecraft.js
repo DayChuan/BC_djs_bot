@@ -77,11 +77,9 @@ export const FALLBACK_MAX_MESSAGES = 8
 //        console.log(m,r.status,Date.now()-t+"ms")}
 //      catch(e){console.log(m,"逾時或錯誤",e.name)}}})()'
 //  200=可用｜429=可用但額度滿了(要留著)｜404=這把金鑰不能用｜逾時=剔除
+//⚠️ U16 驗收用的暫時設定，驗完要 revert
 export const GEMINI_MODELS = [
-    'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3.1-pro-preview',
+    'gemini-nonexistent',
 ]
 
 //單一模型等多久放棄。
@@ -93,11 +91,12 @@ export const GEMINI_TIMEOUT_MS = 45 * 1000
 //取代原本的「等 20 秒當場再跑一輪」(GEMINI_RETRY_DELAY_MS，已拿掉)。
 //
 //多久掃一次佇列。工作自己的 nextAt 到了才會跑，這裡只是檢查頻率。
-export const QUEUE_CRON = '*/30 * * * *'
+//⚠️ U16 驗收用的暫時設定(原值 '*/30 * * * *'、30 分鐘、5 次)，驗完要 revert
+export const QUEUE_CRON = '*/2 * * * *'
 //一般失敗(503／逾時)後多久再試
-export const QUEUE_RETRY_MS = 30 * 60 * 1000
+export const QUEUE_RETRY_MS = 2 * 60 * 1000
 //失敗幾次(含第一次)就放棄並通知管理員
-export const QUEUE_MAX_ATTEMPTS = 5
+export const QUEUE_MAX_ATTEMPTS = 2
 //額度用完(429)時排到「隔天」幾點(台灣時間)。
 //額度實際上是太平洋時間午夜重置(約台灣 16:00)，但使用者要的是隔天再試，不精算(單元檔 U16)。
 export const QUEUE_QUOTA_RETRY_HOUR = 9
