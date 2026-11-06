@@ -1,7 +1,7 @@
 # U16　公告自動翻日文 ＋ Gemini 失敗佇列
 
 狀態：進行中
-進度：6/9（程式全部完成，剩 jail 測試與兩站驗收）
+進度：7/9（程式與 jail 測試完成，剩兩站驗收）
 依賴：U03（`state.js`，已完成）、U14（`gemini.js` / `minecraftFeed.js`，已完成）
 可平行：**不可**。會動到 `minecraftFeed.js` 的貼文流程，跟其他要改那支檔案的單元會衝突
 分支：**留在 `test`，不要開分支**（見 CLAUDE.md 的單元制第 2 條）
@@ -277,7 +277,7 @@ export const event = {name: Events.MessageCreate}
 - [x] 16-4　佇列的落地與 `registerRestore`
 - [x] 16-5　佇列執行器（兩種 kind）＋ 測試；翻譯失敗接上佇列與 ⏳
 - [x] 16-6　`minecraftFeed.js` 接上佇列，拿掉 `GEMINI_RETRY_DELAY_MS`
-- [ ] 16-7　`yarn test` 全過（在測試 jail 跑，不要在 NAS 目錄跑）
+- [x] 16-7　`yarn test` 全過（在測試 jail 跑，不要在 NAS 目錄跑）（2026-11-06：23 檔 809 個全過）
 - [ ] 16-8　測試站實機驗收
 - [ ] 16-9　正式站驗收
 
