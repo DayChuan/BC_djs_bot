@@ -86,14 +86,21 @@ export const GEMINI_MODELS = [
 
 //單一模型等多久放棄。
 //會思考的模型正常 10-20 秒回完，原本給 90 秒，但等到 90 秒幾乎都是等不到了，
-//只是把時間花在必然失敗的等待上。縮短才有預算做 GEMINI_RETRY_DELAY_MS 那一輪重試，
-//縮短後「整條鏈跑兩輪」的最壞耗時反而比原本「跑一輪」短(2026-11-06)。
+//只是把時間花在必然失敗的等待上(2026-11-06)。
 export const GEMINI_TIMEOUT_MS = 45 * 1000
 
-//整條模型鏈都失敗時，等多久再重跑一輪。0 代表不重試。
-//503 的尖峰通常幾十秒就過去了，而這個功能一個月才跑幾次，多等 20 秒換一次成功很划算。
-//只重試一輪：再多就會逼近 Discord 互動的 15 分鐘上限。
-export const GEMINI_RETRY_DELAY_MS = 20 * 1000
+//Gemini 失敗佇列(U16，core/geminiQueue.js)。整條模型鏈都失敗(all-failed)的工作排進來稍後重試，
+//取代原本的「等 20 秒當場再跑一輪」(GEMINI_RETRY_DELAY_MS，已拿掉)。
+//
+//多久掃一次佇列。工作自己的 nextAt 到了才會跑，這裡只是檢查頻率。
+export const QUEUE_CRON = '*/30 * * * *'
+//一般失敗(503／逾時)後多久再試
+export const QUEUE_RETRY_MS = 30 * 60 * 1000
+//失敗幾次(含第一次)就放棄並通知管理員
+export const QUEUE_MAX_ATTEMPTS = 5
+//額度用完(429)時排到「隔天」幾點(台灣時間)。
+//額度實際上是太平洋時間午夜重置(約台灣 16:00)，但使用者要的是隔天再試，不精算(單元檔 U16)。
+export const QUEUE_QUOTA_RETRY_HOUR = 9
 
 //要求模型守的長度。回來的文字仍然會過切段函式，不信任模型守長度。
 export const SUMMARY_MAX_CHARS = 1500
@@ -113,6 +120,9 @@ export default {
     FALLBACK_MAX_MESSAGES,
     GEMINI_MODELS,
     GEMINI_TIMEOUT_MS,
-    GEMINI_RETRY_DELAY_MS,
+    QUEUE_CRON,
+    QUEUE_RETRY_MS,
+    QUEUE_MAX_ATTEMPTS,
+    QUEUE_QUOTA_RETRY_HOUR,
     SUMMARY_MAX_CHARS,
 }

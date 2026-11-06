@@ -6,6 +6,7 @@ import mc from '@/config/minecraft'
 import {generateText} from '@/core/gemini'
 import {scheduleCron} from '@/core/scheduler'
 import {getState, updateState, registerRestore} from '@/core/state'
+import {enqueue, registerKind, isRetryable, jobId} from '@/core/geminiQueue'
 import logger from '@/core/logger'
 
 //Minecraft Java 版更新通知(U14)。
@@ -349,8 +350,14 @@ export const buildThreadName = (title, max = mc.THREAD_NAME_MAX) => {
 
 const SUMMARY_LANGS = {
     zh: {
+        //管理員通知上的「項目」
+        name: '中文摘要',
         heading: '**【中文摘要】**',
         failed: '（中文摘要產生失敗，請看原文）',
+        //整條鏈失敗、已排進 Gemini 佇列(U16)
+        pending: '（⏳ 中文摘要暫時產生失敗，稍後自動補上）',
+        //佇列補上的那則開頭，不標的話看起來像重複貼
+        late: '-# ⏳ 稍後補上的中文摘要',
         //讓大家知道這段是 AI 整理的，以及是哪個模型整理的。
         //-# 開頭是 Discord 的小字(subtext)，灰色且字級較小，不會跟摘要內容搶版面。
         credit: (model) => `-# 🤖 由 Gemini（${model}）整理`,
@@ -366,8 +373,12 @@ const SUMMARY_LANGS = {
         //中日之間要有明確的分界線(2026-11-05 使用者要求)。
         //⚠️ Discord 不把 --- 當成水平線，會原樣印出三個減號，所以用實心線字元自己畫。
         divider: '━━━━━━━━━━━━━━━━',
+        name: '日文摘要',
         heading: '**【日本語要約】**',
         failed: '（日本語の要約を生成できませんでした。原文をご覧ください）',
+        //讀者是日本成員，佔位與補上的標示都寫日文(同公告翻譯，U16)
+        pending: '（⏳ 日本語の要約は後ほど自動で追加されます）',
+        late: '-# ⏳ 後から追加された日本語の要約',
         credit: (model) => `-# 🤖 Gemini（${model}）による要約`,
         prompt: (title, body, max) =>
             `以下は Minecraft Java 版の公式アップデート記事「${title}」の本文です。日本語で要点をまとめてください：\n` +
@@ -389,10 +400,14 @@ export const buildSummaryPrompt = (lang, title, body, max = mc.SUMMARY_MAX_CHARS
 //一種語言的摘要 → 訊息陣列。摘要失敗(text 是 null)就是一行失敗說明。
 //model 是實際產出這段文字的模型名稱，會附在最後一行；沒給就不附
 //(失敗的那條路本來就沒有模型可標)。
-export const buildSummaryMessages = (lang, text, model = null, max = mc.MESSAGE_MAX) => {
-    const {divider, heading, failed, credit} = SUMMARY_LANGS[lang]
+//pending：失敗但已排進佇列，失敗說明換成「稍後自動補上」。
+//late：佇列補上的那一則，最前面加一行「稍後補上」的小字。
+export const buildSummaryMessages = (lang, text, model = null, max = mc.MESSAGE_MAX, {pending = false, late = false} = {}) => {
+    const {divider, heading, credit} = SUMMARY_LANGS[lang]
+    const failed = pending ? SUMMARY_LANGS[lang].pending : SUMMARY_LANGS[lang].failed
     //分界線只加在這一段的第一則；摘要太長被切成多則時後面幾則不重複畫線
-    const head = divider ? `${divider}\n${heading}` : heading
+    const titled = divider ? `${divider}\n${heading}` : heading
+    const head = late ? `${SUMMARY_LANGS[lang].late}\n${titled}` : titled
     const body = text ? (model ? `${text}\n${credit(model)}` : text) : failed
     return splitMessage(`${head}\n${body}`, max)
 }
@@ -519,11 +534,8 @@ const fetchChannel = async(client, id, label) => {
 //只送純文字，不解析任何提及(文章或摘要裡出現 @everyone 也不能真的 tag 到人)
 const sendText = (target, content) => target.send({content, allowedMentions: {parse: []}})
 
-//只有「整條鏈都試過還是不行」才值得等一下重來。
-//core/gemini.js 的 classifyStatus 已經把 429/503/404/逾時歸成「換下一個模型」，
-//所以暫時性的失敗最後一定收斂成 all-failed；
-//no-key / bad-key / http-401 這種金鑰問題則是重試一百次也一樣，不能等。
-const WORTH_RETRY = 'all-failed'
+//Gemini 佇列(U16)裡這種工作的 kind
+export const SUMMARY_KIND = 'summary'
 
 //跑一次整條模型鏈
 const summarize = (item, body, lang) => generateText(buildSummaryPrompt(lang, item.title, body), {
@@ -532,48 +544,61 @@ const summarize = (item, body, lang) => generateText(buildSummaryPrompt(lang, it
     label: `Gemini[${lang}] ${item.title}`,
 })
 
-//兩種語言各自呼叫、各自判斷；都失敗或沒有 key → 退回貼原文
+//兩種語言各自呼叫、各自判斷；都失敗或沒有 key → 退回貼原文。
+//回傳 {messages, pending, results}：pending 是要排進 Gemini 佇列的語言，
+//要等 postArticle 貼出第一則、知道實際貼到哪裡(討論串 id)之後才排得進去。
+//
+//原本整條鏈失敗時會「等 20 秒當場再跑一輪」，已由佇列取代(U16)：
+//當場重跑只是在賭尖峰剛好過去，而 429 時等再久額度也不會回來，只會燒更快。
+//
+//只有 all-failed 排佇列；金鑰類的錯誤重試一百次也一樣，維持一行失敗說明(使用者 2026-11-06 決定)。
 const buildContentMessages = async(item, body) => {
     const results = {}
     for(const lang of LANGS){
         results[lang] = await summarize(item, body, lang)
     }
 
-    //整條鏈都被尖峰擋掉時再等一輪。
-    //2026-11-06：snapshot 6 的中文連吃 503、503、逾時，日文卻成功 ——
-    //差別只在兩者隔了一分多鐘，剛好避開同一個尖峰。等一下再跑就是在複製那個運氣。
-    //只重試一輪，而且只重試失敗的語言(成功的不能重跑，會換成另一份不同的摘要)。
-    //⚠️ quota(429)的不重試：等 20 秒額度也不會回來，只會把剩下的燒更快。
-    //2026-11-06 正式站實測，兩輪重試共 16 次呼叫，額度就是這樣打完的。
-    const retry = LANGS.filter((lang) =>
-        !results[lang].text && results[lang].reason === WORTH_RETRY && !results[lang].quota)
-    if(retry.length > 0 && mc.GEMINI_RETRY_DELAY_MS > 0){
-        logger.warn(
-            `Minecraft：「${item.title}」的 ${retry.join('、')} 摘要整條鏈都失敗，` +
-            `等 ${Math.round(mc.GEMINI_RETRY_DELAY_MS / 1000)} 秒後再試一輪`
-        )
-        await sleep(mc.GEMINI_RETRY_DELAY_MS)
-        for(const lang of retry){
-            results[lang] = await summarize(item, body, lang)
-            if(results[lang].text) logger.info(`Minecraft：「${item.title}」的 ${lang} 摘要第二輪成功`)
-        }
-    }
+    const pending = LANGS.filter((lang) => !results[lang].text && isRetryable(results[lang]))
 
     const succeeded = LANGS.filter((lang) => results[lang].text)
     if(succeeded.length === 0){
         logger.warn(`Minecraft：「${item.title}」兩種摘要都失敗，退回貼原文(最多 ${mc.FALLBACK_MAX_MESSAGES} 則)`)
-        return buildFallbackMessages(body, item.link)
+        return {messages: buildFallbackMessages(body, item.link), pending, results}
     }
 
     logger.info(
         `Minecraft：「${item.title}」摘要 ` +
         LANGS.map((lang) => `${lang}=${results[lang].model || '失敗'}`).join(' ')
     )
-    return LANGS.flatMap((lang) => buildSummaryMessages(lang, results[lang].text, results[lang].model))
+    const messages = LANGS.flatMap((lang) => buildSummaryMessages(
+        lang, results[lang].text, results[lang].model, mc.MESSAGE_MAX, {pending: pending.includes(lang)},
+    ))
+    return {messages, pending, results}
 }
 
-//回傳 {ok, url, title}。ok = 內容至少貼出了第一則(標題那則)，這篇就算處理完、可以寫 seen。
+//失敗的語言排進 Gemini 佇列，補上時貼回 targetId(討論串或頻道)。
+//排不進去只記 log：文章已經貼出去了，不能因為這個讓整篇算失敗、下一輪重貼。
+const enqueueSummaries = async(client, article, targetId, pending, results) => {
+    for(const lang of pending){
+        try{
+            await enqueue(client, {
+                id: jobId(SUMMARY_KIND, `${article.link}:${lang}`),
+                kind: SUMMARY_KIND,
+                channelId: targetId,
+                url: article.link,
+                label: `${article.title}（${SUMMARY_LANGS[lang].name}）`,
+                payload: {link: article.link, title: article.title, lang},
+            }, results[lang])
+        }
+        catch(e){
+            logger.error(`Minecraft：「${article.title}」的 ${lang} 摘要排不進佇列：`, e)
+        }
+    }
+}
+
+//回傳 {ok, url, title, targetId}。ok = 內容至少貼出了第一則(標題那則)，這篇就算處理完、可以寫 seen。
 //title 回傳是給呼叫端用的：補發時標題要抓了文章頁才知道，通知那則也要用同一個。
+//targetId 是實際貼文的地方(討論串或頻道)，佇列補上的摘要要貼回這裡。
 const postArticle = async(client, item) => {
     const {title: pageTitle, body} = await fetchArticle(item.link)
     if(!body) return {ok: false}
@@ -584,7 +609,8 @@ const postArticle = async(client, item) => {
     //RSS 來的本來就有標題；補發只給網址，就用文章頁的 og:title。
     //兩個都沒有的話退回用網址，至少貼出去的東西看得出是哪一篇。
     const article = {...item, title: item.title || pageTitle || item.link}
-    const messages = [buildHeaderMessage(article), ...await buildContentMessages(article, body)]
+    const {messages: content, pending, results} = await buildContentMessages(article, body)
+    const messages = [buildHeaderMessage(article), ...content]
 
     let target = parent
     let thread = null
@@ -639,8 +665,36 @@ const postArticle = async(client, item) => {
     }
 
     logger.info(`Minecraft：「${article.title}」已貼出 ${messages.length} 則到 ${thread ? '討論串' : '更新內容頻道'}`)
-    return {ok: true, url: thread ? thread.url : first.url, title: article.title}
+
+    //第一則貼出去之後才排：第一則就失敗的話這篇下一輪會整篇重來，不需要佇列
+    await enqueueSummaries(client, article, target.id, pending, results)
+
+    return {ok: true, url: thread ? thread.url : first.url, title: article.title, targetId: target.id}
 }
+
+//Gemini 佇列重跑一種語言的摘要：重抓文章頁(佇列不存內文，state.json 每次寫入都整份重寫)，
+//摘要成功就貼回當初那一篇所在的討論串。
+//先確認貼得回去才呼叫 Gemini，貼不回去的話那次呼叫就白白消耗額度。
+const runSummaryJob = async(client, job) => {
+    const {link, title, lang} = job.payload || {}
+    if(!SUMMARY_LANGS[lang]) return {drop: `不認得的語言：${lang}`}
+
+    const target = await fetchChannel(client, job.channelId, '補上摘要的討論串')
+    if(!target) return {ok: false, result: {reason: 'channel-unavailable'}}
+
+    const {body} = await fetchArticle(link)
+    if(!body) return {ok: false, result: {reason: 'article-fetch-failed'}}
+
+    const result = await summarize({title, link}, body, lang)
+    if(!result.text) return {ok: false, result}
+
+    for(const content of buildSummaryMessages(lang, result.text, result.model, mc.MESSAGE_MAX, {late: true})){
+        await sendText(target, content)
+    }
+    return {ok: true}
+}
+
+registerKind(SUMMARY_KIND, {run: runSummaryJob})
 
 //通知失敗只記 log：內容已經搬過去了，不能因為通知失敗重搬一次
 const postNotice = async(client, item, url) => {
@@ -793,6 +847,7 @@ registerRestore(SECTION, restore)
 export default {
     SECTION,
     JOB_KEY,
+    SUMMARY_KIND,
     decodeBytes,
     decodeEntities,
     parseDate,

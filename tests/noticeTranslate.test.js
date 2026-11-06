@@ -1,7 +1,12 @@
-import {describe, it, expect, vi} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import * as notice from '@/core/noticeTranslate'
+import * as queue from '@/core/geminiQueue'
+import * as state from '@/core/state'
+import config from '@/config'
 
 //真正的 logger 會開檔與串流，在測試 jail 裡會讓 vitest 卡住跑不完(同 minecraftFeed.test.js)
 vi.mock('@/core/logger', () => ({
@@ -96,5 +101,150 @@ describe('buildTranslationMessages', () => {
         for(const message of messages) expect(message.length).toBeLessThanOrEqual(2000)
         expect(messages[0].startsWith('-# 🤖')).toBe(true)
         expect(messages.slice(1).some((message) => message.includes('AI 翻訳'))).toBe(false)
+    })
+})
+
+describe('buildJobLabel', () => {
+    it('取公告開頭，換行壓成空白，太長加省略號', () => {
+        expect(notice.buildJobLabel('明天\n維修')).toBe('公告翻譯：明天 維修')
+        expect(notice.buildJobLabel('あ'.repeat(50), 30)).toBe('公告翻譯：' + 'あ'.repeat(30) + '…')
+    })
+})
+
+/////////////////////////// 整段流程(假的 message、client、fetch) ///////////////////////////
+
+//不碰 discord.js：message 只需要 reply / react / reactions.cache，client 只需要 channels.fetch 與 user.id
+const makeMessage = ({content = '明天晚上八點維修', channelId = config.channels.manualNotice, gone = false} = {}) => {
+    const message = {
+        id: 'm1',
+        channelId,
+        content,
+        url: 'https://discord.com/channels/g/c/m1',
+        author: {bot: false},
+        replies: [],
+        reacted: [],
+        unreacted: [],
+        reply: async(options) => {
+            message.replies.push(options)
+            return {}
+        },
+        react: async(emoji) => {
+            message.reacted.push(emoji)
+        },
+    }
+    message.reactions = {cache: new Map([[notice.PENDING_REACTION, {users: {remove: async(id) => {
+        message.unreacted.push(id)
+    }}}]])}
+    message.client = {
+        user: {id: 'bot'},
+        channels: {
+            fetch: async() => {
+                if(gone) throw Object.assign(new Error('Unknown Message'), {code: 10008})
+                return {messages: {fetch: async() => message}}
+            },
+        },
+    }
+    return message
+}
+
+//Gemini 一律回 status；回傳呼叫次數的計數器
+const stubGemini = (status) => {
+    const calls = {count: 0}
+    vi.stubGlobal('fetch', vi.fn(async() => {
+        calls.count += 1
+        const body = status === 200
+            ? {candidates: [{content: {parts: [{text: '明日の夜8時にメンテナンス'}]}}]}
+            : {error: {code: status}}
+        return {ok: status === 200, status, json: async() => body, text: async() => JSON.stringify(body)}
+    }))
+    return calls
+}
+
+//讓佇列裡的工作全部到期
+const makeAllDue = () => state.updateState(queue.SECTION, (current) => {
+    current.jobs = current.jobs.map((job) => ({...job, nextAt: 0}))
+})
+
+describe('translateMessage', () => {
+    let tmpDir = null
+
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-notice-'))
+        process.env.STATE_DATA_DIR = tmpDir
+        process.env.GEMINI_API_KEY = 'test-key'
+        state.resetQueue()
+    })
+
+    afterEach(() => {
+        vi.unstubAllGlobals()
+        delete process.env.GEMINI_API_KEY
+        delete process.env.STATE_DATA_DIR
+        fs.rmSync(tmpDir, {recursive: true, force: true})
+    })
+
+    it('成功 → 回覆譯文，不解析提及、不 ping 發公告的人，不進佇列', async() => {
+        stubGemini(200)
+        const message = makeMessage()
+        expect(await notice.translateMessage(message)).toBe('translated')
+
+        expect(message.replies).toHaveLength(1)
+        expect(message.replies[0].content.startsWith('-# 🤖 AI 翻訳')).toBe(true)
+        expect(message.replies[0].content).toContain('明日の夜8時にメンテナンス')
+        expect(message.replies[0].allowedMentions).toEqual({parse: [], repliedUser: false})
+        expect(await queue.getJobs()).toEqual([])
+    })
+
+    it('其他頻道 → 不呼叫 Gemini', async() => {
+        const calls = stubGemini(200)
+        expect(await notice.translateMessage(makeMessage({channelId: '123'}))).toBe('skipped')
+        expect(calls.count).toBe(0)
+    })
+
+    it('整條鏈失敗(503) → 排進佇列並在原訊息加 ⏳', async() => {
+        stubGemini(503)
+        const message = makeMessage()
+        expect(await notice.translateMessage(message)).toBe('queued')
+
+        expect(message.replies).toEqual([])
+        expect(message.reacted).toEqual([notice.PENDING_REACTION])
+        const [job] = await queue.getJobs()
+        expect(job).toMatchObject({
+            id: 'translate:m1', kind: 'translate', channelId: config.channels.manualNotice, messageId: 'm1',
+            url: message.url, payload: {text: '明天晚上八點維修'}, attempts: 1,
+        })
+    })
+
+    it('金鑰錯誤(400) → 不排佇列、不加 ⏳(使用者決定：金鑰失效不排)', async() => {
+        stubGemini(400)
+        const message = makeMessage()
+        expect(await notice.translateMessage(message)).toBe('failed')
+        expect(message.reacted).toEqual([])
+        expect(await queue.getJobs()).toEqual([])
+    })
+
+    it('佇列補上 → 回覆標明是稍後補上的譯文，拿掉 ⏳，移出佇列', async() => {
+        stubGemini(503)
+        const message = makeMessage()
+        await notice.translateMessage(message)
+        await makeAllDue()
+
+        stubGemini(200)
+        expect((await queue.runQueue(message.client)).done).toBe(1)
+        expect(message.replies).toHaveLength(1)
+        expect(message.replies[0].content.startsWith('-# ⏳')).toBe(true)
+        expect(message.replies[0].allowedMentions).toEqual({parse: [], repliedUser: false})
+        expect(message.unreacted).toEqual(['bot'])
+        expect(await queue.getJobs()).toEqual([])
+    })
+
+    it('原公告已被刪除 → 移出佇列，不再呼叫 Gemini', async() => {
+        stubGemini(503)
+        await notice.translateMessage(makeMessage())
+        await makeAllDue()
+
+        const calls = stubGemini(200)
+        expect((await queue.runQueue(makeMessage({gone: true}).client)).dropped).toBe(1)
+        expect(calls.count).toBe(0)
+        expect(await queue.getJobs()).toEqual([])
     })
 })

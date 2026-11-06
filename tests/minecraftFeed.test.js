@@ -5,6 +5,7 @@ import path from 'node:path'
 import * as feed from '@/core/minecraftFeed'
 import mcConfig from '@/config/minecraft'
 import * as state from '@/core/state'
+import * as queue from '@/core/geminiQueue'
 import config from '@/config'
 import production from '@/config/environments/production'
 import testEnv from '@/config/environments/test'
@@ -440,9 +441,10 @@ vi.mock('node:child_process', () => ({
 }))
 
 //RSS 用 UTF-16LE 回(跟實際一樣)，文章頁回 HTML，Gemini 依 geminiStatus 回應。
-//geminiFailFirst：前 n 次 Gemini 呼叫一律回 503，用來測「第一輪全失敗、第二輪成功」。
+//geminiFailFirst：前 n 次 Gemini 呼叫一律回 503。
+//geminiJaStatus：日文摘要的請求(提示詞含「日本語」)改回這個狀態碼，用來測「只有一種語言失敗」。
 //回傳的 calls 兩種管道都記，讓「不該呼叫 Gemini」這類斷言照舊成立。
-const stubNetwork = ({geminiStatus = 200, geminiFailFirst = 0, curlFails = false} = {}) => {
+const stubNetwork = ({geminiStatus = 200, geminiFailFirst = 0, geminiJaStatus = null, curlFails = false} = {}) => {
     const calls = []
     let geminiCalls = 0
 
@@ -454,11 +456,14 @@ const stubNetwork = ({geminiStatus = 200, geminiFailFirst = 0, curlFails = false
         callback(new Error(`unexpected curl ${url}`), Buffer.alloc(0), '')
     }
 
-    vi.stubGlobal('fetch', vi.fn(async(url) => {
+    vi.stubGlobal('fetch', vi.fn(async(url, options = {}) => {
         calls.push(url)
         if(url.includes('generativelanguage')){
             geminiCalls += 1
-            const status = geminiCalls <= geminiFailFirst ? 503 : geminiStatus
+            const isJa = String(options.body || '').includes('日本語')
+            const status = geminiCalls <= geminiFailFirst
+                ? 503
+                : (isJa && geminiJaStatus !== null ? geminiJaStatus : geminiStatus)
             const json = status === 200
                 ? {candidates: [{content: {parts: [{text: '- 摘要內容', thoughtSignature: 'xxx'}]}}]}
                 : {error: {code: status}}
@@ -470,18 +475,12 @@ const stubNetwork = ({geminiStatus = 200, geminiFailFirst = 0, curlFails = false
 }
 
 describe('runCheck', () => {
-    const RETRY_DELAY = mcConfig.GEMINI_RETRY_DELAY_MS
-
     beforeEach(() => {
         process.env.GEMINI_API_KEY = 'test-key'
-        //正式值是 20 秒，照跑的話整個 vitest 會多等 20 秒。
-        //要測重試的那條自己把它設回一個很小的值。
-        mcConfig.GEMINI_RETRY_DELAY_MS = 0
     })
 
     afterEach(() => {
         delete process.env.GEMINI_API_KEY
-        mcConfig.GEMINI_RETRY_DELAY_MS = RETRY_DELAY
         //忘了 stubNetwork 的測試要當場炸掉，不要沿用上一條的 handler 安靜地跑過去
         curl.handler = null
     })
@@ -528,41 +527,81 @@ describe('runCheck', () => {
         expect(inThread[1]).toContain('AI 摘要無法產生')
         expect(inThread.join('\n')).toContain('Added Calcite Blockset')
         expect((await state.getState(feed.SECTION)).seen).toContain(SNAPSHOT_7)
+
+        //退回貼原文的同時，兩種語言都排進佇列，補上時貼回這個討論串(U16)
+        const jobs = await queue.getJobs()
+        expect(jobs.map((job) => job.id).sort()).toEqual([`summary:${SNAPSHOT_7}:ja`, `summary:${SNAPSHOT_7}:zh`])
+        for(const job of jobs) expect(job.channelId).toBe('thread-1')
     })
 
-    it('整條模型鏈都被尖峰擋掉 → 等一下再跑一輪，第二輪成功就用第二輪的結果', async() => {
-        mcConfig.GEMINI_RETRY_DELAY_MS = 1
+    it('只有日文整條鏈失敗 → 中文照貼、日文換成「稍後補上」並排進佇列', async() => {
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
-        //中日各跑完一整條鏈都失敗，之後才放行
-        stubNetwork({geminiFailFirst: mcConfig.GEMINI_MODELS.length * 2})
+        stubNetwork({geminiJaStatus: 503})
         const client = makeClient()
-        const report = await feed.runCheck(client, 'test')
+        await feed.runCheck(client, 'test')
 
-        expect(report.posted).toHaveLength(1)
         const inThread = client.sent.filter((m) => m.channel === 'thread-1').map((m) => m.content)
-        expect(inThread[1]).toContain('【中文摘要】')
-        expect(inThread.join('\n')).not.toContain('AI 摘要無法產生')
+        expect(inThread[1]).toContain('- 摘要內容')
+        expect(inThread[2]).toContain('後ほど自動で追加されます')
+        expect(inThread.join('\n')).not.toContain('要約を生成できませんでした')
+
+        const [job] = await queue.getJobs()
+        expect(job).toMatchObject({
+            id: `summary:${SNAPSHOT_7}:ja`,
+            kind: feed.SUMMARY_KIND,
+            channelId: 'thread-1',
+            url: SNAPSHOT_7,
+            label: 'Minecraft 26.4 Snapshot 7（日文摘要）',
+            payload: {link: SNAPSHOT_7, title: 'Minecraft 26.4 Snapshot 7', lang: 'ja'},
+            attempts: 1,
+        })
+        expect(job.nextAt - job.createdAt).toBe(mcConfig.QUEUE_RETRY_MS)
     })
 
-    it('額度用完(429) → 不做那輪 20 秒重試，免得把剩下的額度燒更快', async() => {
-        mcConfig.GEMINI_RETRY_DELAY_MS = 1
+    it('額度用完(429) → 不當場重試，佇列排到隔天 09:00', async() => {
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
         const calls = stubNetwork({geminiStatus: 429})
         await feed.runCheck(makeClient(), 'test')
 
-        //兩種語言各跑一次完整的鏈就停，不會有第二輪
+        //兩種語言各跑一次完整的鏈就停
         expect(calls.filter((url) => url.includes('generativelanguage')))
             .toHaveLength(mcConfig.GEMINI_MODELS.length * 2)
+
+        const jobs = await queue.getJobs()
+        expect(jobs).toHaveLength(2)
+        for(const job of jobs){
+            expect(job.quota).toBe(true)
+            expect(job.nextAt).toBe(queue.nextQuotaRetryAt(job.createdAt))
+        }
     })
 
-    it('金鑰無效 → 不重試(重試一百次也一樣)，每種語言只打一次就放棄', async() => {
-        mcConfig.GEMINI_RETRY_DELAY_MS = 1
+    it('金鑰無效 → 每種語言只打一次就放棄，也不排佇列', async() => {
         await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
         const calls = stubNetwork({geminiStatus: 401})
         await feed.runCheck(makeClient(), 'test')
 
-        //401 直接放棄整條鏈，也不會進第二輪：兩種語言各一次
         expect(calls.filter((url) => url.includes('generativelanguage'))).toHaveLength(2)
+        expect(await queue.getJobs()).toEqual([])
+    })
+
+    it('佇列補上日文摘要 → 貼回原本的討論串，開頭標明是稍後補上的，移出佇列', async() => {
+        await state.setState(feed.SECTION, {initialized: true, seen: [SNAPSHOT_6]})
+        stubNetwork({geminiJaStatus: 503})
+        await feed.runCheck(makeClient(), 'test')
+        await state.updateState(queue.SECTION, (current) => {
+            current.jobs = current.jobs.map((job) => ({...job, nextAt: 0}))
+        })
+
+        stubNetwork()
+        const client = makeClient()
+        expect((await queue.runQueue(client)).done).toBe(1)
+
+        expect(client.sent).toHaveLength(1)
+        expect(client.sent[0].channel).toBe('thread-1')
+        expect(client.sent[0].content.startsWith('-# ⏳ 後から追加された日本語の要約')).toBe(true)
+        expect(client.sent[0].content).toContain('【日本語要約】')
+        expect(client.sent[0].content).toContain('- 摘要內容')
+        expect(await queue.getJobs()).toEqual([])
     })
 
     it('更新內容頻道不存在 → 不崩潰、seen 沒有被寫入', async() => {
